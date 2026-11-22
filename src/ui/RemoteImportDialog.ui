@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>RemoteImportDialog</class>
+ <widget class="QDialog" name="RemoteImportDialog">
+  <property name="windowTitle"><string>从远程导入笔记本</string></property>
+  <property name="minimumSize"><size><width>620</width><height>0</height></size></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="sizeConstraint"><enum>QLayout::SetMinimumSize</enum></property>
+   <item>
+    <widget class="QGroupBox" name="serverGroup"><property name="title"><string>远端存储</string></property>
+     <layout class="QFormLayout" name="serverForm">
+      <property name="fieldGrowthPolicy"><enum>QFormLayout::AllNonFixedFieldsGrow</enum></property>
+      <item row="0" column="0"><widget class="QLabel" name="endpointLabel"><property name="text"><string>WebDAV 地址：</string></property></widget></item>
+      <item row="0" column="1"><widget class="QLineEdit" name="endpointEdit"><property name="placeholderText"><string>https://example.com/dav/</string></property></widget></item>
+      <item row="1" column="0"><widget class="QLabel" name="remotePathLabel"><property name="text"><string>远端根目录：</string></property></widget></item>
+      <item row="1" column="1"><widget class="QLineEdit" name="remotePathEdit"><property name="text"><string>Qoplin</string></property></widget></item>
+      <item row="2" column="0"><widget class="QLabel" name="userLabel"><property name="text"><string>用户名：</string></property></widget></item>
+      <item row="2" column="1"><widget class="QLineEdit" name="userEdit"/></item>
+      <item row="3" column="0"><widget class="QLabel" name="passwordLabel"><property name="text"><string>服务器密码：</string></property></widget></item>
+      <item row="3" column="1"><widget class="QLineEdit" name="passwordEdit"><property name="echoMode"><enum>QLineEdit::Password</enum></property></widget></item>
+      <item row="4" column="0"><widget class="QLabel" name="notebookLabel"><property name="text"><string>远端笔记本：</string></property></widget></item>
+      <item row="4" column="1"><layout class="QHBoxLayout" name="notebookLayout"><item><widget class="QComboBox" name="notebookCombo"><property name="editable"><bool>true</bool></property></widget></item><item><widget class="QPushButton" name="queryButton"><property name="text"><string>查询</string></property></widget></item></layout></item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="localGroup"><property name="title"><string>解密与本地位置</string></property>
+     <layout class="QFormLayout" name="localForm">
+      <property name="fieldGrowthPolicy"><enum>QFormLayout::AllNonFixedFieldsGrow</enum></property>
+      <item row="0" column="0"><widget class="QLabel" name="masterLabel"><property name="text"><string>主密码：</string></property></widget></item>
+      <item row="0" column="1"><widget class="QLineEdit" name="masterPasswordEdit"><property name="echoMode"><enum>QLineEdit::Password</enum></property><property name="placeholderText"><string>用于解密远端笔记本</string></property></widget></item>
+      <item row="1" column="0"><widget class="QLabel" name="directoryLabel"><property name="text"><string>本地父目录：</string></property></widget></item>
+      <item row="1" column="1"><layout class="QHBoxLayout" name="directoryLayout"><item><widget class="QLineEdit" name="directoryEdit"><property name="placeholderText"><string>选择保存笔记本的父目录</string></property></widget></item><item><widget class="QPushButton" name="browseButton"><property name="text"><string>浏览…</string></property></widget></item></layout></item>
+      <item row="2" column="0"><widget class="QLabel" name="nameLabel"><property name="text"><string>本地名称：</string></property></widget></item>
+      <item row="2" column="1"><widget class="QLineEdit" name="nameEdit"><property name="placeholderText"><string>留空则使用远端名称</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+   <item><widget class="QProgressBar" name="progressBar"><property name="visible"><bool>false</bool></property><property name="textVisible"><bool>false</bool></property></widget></item>
+   <item><widget class="QLabel" name="messageLabel"><property name="visible"><bool>false</bool></property><property name="wordWrap"><bool>true</bool></property><property name="sizePolicy"><sizepolicy hsizetype="Preferred" vsizetype="Maximum"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property></widget></item>
+   <item><spacer name="bottomSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item><spacer name="horizontalSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+     <item><widget class="QPushButton" name="importButton"><property name="text"><string>导入</string></property><property name="default"><bool>true</bool></property></widget></item>
+     <item><widget class="QPushButton" name="closeButton"><property name="text"><string>关闭</string></property></widget></item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

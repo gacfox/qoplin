@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SyncDialog</class>
+ <widget class="QDialog" name="SyncDialog">
+  <property name="windowTitle"><string>WebDAV 同步</string></property>
+  <property name="minimumSize"><size><width>560</width><height>410</height></size></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item><widget class="QCheckBox" name="enabledCheck"><property name="text"><string>为此笔记本启用 WebDAV 同步</string></property></widget></item>
+   <item>
+    <widget class="QGroupBox" name="serverGroup"><property name="title"><string>服务器</string></property>
+     <layout class="QFormLayout" name="serverForm">
+      <property name="fieldGrowthPolicy"><enum>QFormLayout::AllNonFixedFieldsGrow</enum></property>
+      <item row="0" column="0"><widget class="QLabel" name="endpointLabel"><property name="text"><string>WebDAV 地址：</string></property></widget></item>
+      <item row="0" column="1"><widget class="QLineEdit" name="endpointEdit"><property name="placeholderText"><string>https://example.com/dav/</string></property></widget></item>
+      <item row="1" column="0"><widget class="QLabel" name="remotePathLabel"><property name="text"><string>远端目录：</string></property></widget></item>
+      <item row="1" column="1"><widget class="QLineEdit" name="remotePathEdit"><property name="text"><string>Qoplin</string></property></widget></item>
+      <item row="2" column="0"><widget class="QLabel" name="userLabel"><property name="text"><string>用户名：</string></property></widget></item>
+      <item row="2" column="1"><widget class="QLineEdit" name="userEdit"/></item>
+      <item row="3" column="0"><widget class="QLabel" name="passwordLabel"><property name="text"><string>服务器密码：</string></property></widget></item>
+      <item row="3" column="1"><widget class="QLineEdit" name="passwordEdit"><property name="echoMode"><enum>QLineEdit::Password</enum></property><property name="placeholderText"><string>以明文保存在本机配置中</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="encryptionGroup"><property name="title"><string>端到端加密</string></property>
+     <layout class="QVBoxLayout" name="encryptionLayout">
+      <item><layout class="QFormLayout" name="masterForm"><item row="0" column="0"><widget class="QLabel" name="masterLabel"><property name="text"><string>主密码：</string></property></widget></item><item row="0" column="1"><widget class="QLineEdit" name="masterPasswordEdit"><property name="echoMode"><enum>QLineEdit::Password</enum></property><property name="placeholderText"><string>忘记主密码将无法恢复远端数据</string></property></widget></item></layout></item>
+      <item><widget class="QLabel" name="securityLabel"><property name="text"><string>标题、目录和正文会在本机加密后上传。冲突按对象采用最后写入版本。两个密码均以明文保存在本机配置中，请仅在可信设备上使用。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+   <item><widget class="QLabel" name="messageLabel"><property name="wordWrap"><bool>true</bool></property></widget></item>
+   <item>
+    <layout class="QHBoxLayout" name="actionsLayout">
+     <item><widget class="QPushButton" name="testButton"><property name="text"><string>测试连接</string></property></widget></item>
+     <item><spacer name="horizontalSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+     <item><widget class="QPushButton" name="saveButton"><property name="text"><string>保存配置</string></property></widget></item>
+     <item><widget class="QPushButton" name="syncButton"><property name="text"><string>保存并立即同步</string></property><property name="default"><bool>true</bool></property></widget></item>
+     <item><widget class="QPushButton" name="closeButton"><property name="text"><string>关闭</string></property></widget></item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -1,0 +1,53 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-mingw-release",
+      "displayName": "Windows MinGW Release",
+      "description": "Qt 6.10.1 MinGW + vcpkg static libsodium",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/windows-mingw-release",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MAKE_PROGRAM": "D:/Qt/Tools/Ninja/ninja.exe",
+        "CMAKE_PREFIX_PATH": "D:/Qt/6.10.1/mingw_64",
+        "CMAKE_C_COMPILER": "D:/Qt/Tools/mingw1310_64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "D:/Qt/Tools/mingw1310_64/bin/g++.exe",
+        "VCPKG_TARGET_TRIPLET": "x64-mingw-static",
+        "VCPKG_HOST_TRIPLET": "x64-mingw-static"
+      },
+      "environment": {
+        "VCPKG_ROOT": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/vcpkg",
+        "PATH": "D:/Qt/Tools/mingw1310_64/bin;D:/Qt/Tools/Ninja;D:/Qt/6.10.1/mingw_64/bin;$penv{PATH}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-mingw-release",
+      "configurePreset": "windows-mingw-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-mingw-release",
+      "configurePreset": "windows-mingw-release",
+      "environment": {
+        "PATH": "D:/Qt/6.10.1/mingw_64/bin;D:/Qt/Tools/mingw1310_64/bin;$penv{PATH}",
+        "QT_QPA_PLATFORM": "offscreen"
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

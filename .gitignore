@@ -1,0 +1,15 @@
+# Build output
+/build*/
+/out/
+
+# IDEs and local settings
+/.qtcreator/
+/.vs/
+/.vscode/
+/CMakeUserPresets.json
+*.user
+*.autosave
+
+# Windows local files
+Thumbs.db
+Desktop.ini

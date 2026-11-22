@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="qoplin.png">icons/qoplin.png</file>
+    </qresource>
+    <qresource prefix="/icons/actions">
+        <file alias="new-note.png">icons/actions/new-note.png</file>
+        <file alias="save.png">icons/actions/save.png</file>
+        <file alias="sync.png">icons/actions/sync.png</file>
+    </qresource>
+</RCC>
