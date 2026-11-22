@@ -76,10 +76,10 @@ void MainWindow::startSync(const QString &serverPassword, const QString &masterP
 
 void MainWindow::syncFinished(bool success, const QString &message, int uploaded, int downloaded)
 {
-    m_syncLabel->setText(success ? tr("同步完成") : tr("同步失败"));
+    m_syncLabel->setText(success ? QString() : tr("同步失败"));
     if (success) {
-        ui->statusBar->showMessage(tr("同步完成：上传 %1 项，下载 %2 项。%3")
-            .arg(uploaded).arg(downloaded).arg(message), 8000);
+        ui->statusBar->showMessage(tr("同步完成：上传 %1 项，下载 %2 项。")
+            .arg(uploaded).arg(downloaded), 8000);
     } else {
         QMessageBox::warning(this, tr("同步失败"), message);
     }
