@@ -9,7 +9,6 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
-#include <QTimer>
 #include <QUrl>
 
 SyncDialog::SyncDialog(NotebookStore *store, AppSettings *settings, QWidget *parent)

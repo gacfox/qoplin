@@ -21,7 +21,7 @@
         <property name="leftMargin"><number>10</number></property><property name="topMargin"><number>8</number></property><property name="rightMargin"><number>10</number></property><property name="bottomMargin"><number>8</number></property>
         <item>
          <layout class="QHBoxLayout" name="titleLayout">
-          <item><widget class="QLineEdit" name="noteTitleEdit"><property name="placeholderText"><string>选择或新建一篇笔记</string></property></widget></item>
+          <item><widget class="QLineEdit" name="noteTitleEdit"><property name="font"><font><weight>75</weight></font></property><property name="placeholderText"><string>选择或新建一篇笔记</string></property></widget></item>
           <item><widget class="QComboBox" name="modeCombo"><item><property name="text"><string>编辑</string></property></item><item><property name="text"><string>预览</string></property></item><item><property name="text"><string>双列</string></property></item></widget></item>
          </layout>
         </item>
@@ -31,7 +31,6 @@
           <widget class="QTextBrowser" name="preview"><property name="openExternalLinks"><bool>true</bool></property><property name="placeholderText"><string>Markdown 预览</string></property></widget>
          </widget>
         </item>
-        <item><widget class="QLabel" name="emptyLabel"><property name="text"><string>从左侧选择一篇笔记，或点击“新建笔记”开始。</string></property><property name="alignment"><set>Qt::AlignCenter</set></property><property name="visible"><bool>false</bool></property></widget></item>
        </layout>
       </widget>
      </widget>
@@ -61,7 +60,7 @@
    <attribute name="toolBarBreak"><bool>false</bool></attribute>
    <addaction name="actionNewNote"/><addaction name="actionSave"/><addaction name="separator"/><addaction name="actionSync"/>
   </widget>
-  <widget class="QStatusBar" name="statusBar"/>
+  <widget class="QStatusBar" name="statusBar"><property name="minimumSize"><size><width>0</width><height>28</height></size></property></widget>
   <action name="actionBack"><property name="text"><string>返回笔记本列表</string></property></action>
   <action name="actionSave"><property name="icon"><iconset resource="../../resources/qoplin.qrc">:/icons/actions/save.png</iconset></property><property name="text"><string>保存</string></property><property name="toolTip"><string>保存（Ctrl+S）</string></property><property name="shortcut"><string>Ctrl+S</string></property><property name="enabled"><bool>false</bool></property></action>
   <action name="actionNewNote"><property name="icon"><iconset resource="../../resources/qoplin.qrc">:/icons/actions/new-note.png</iconset></property><property name="text"><string>新建笔记</string></property><property name="toolTip"><string>新建笔记（Ctrl+N）</string></property><property name="shortcut"><string>Ctrl+N</string></property></action>

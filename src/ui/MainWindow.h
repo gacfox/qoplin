@@ -7,10 +7,10 @@
 
 class AppSettings;
 class NotebookStore;
-class QLabel;
 class QThread;
 class QTimer;
 class QTreeWidgetItem;
+class StatusBarContent;
 class SyncWorker;
 namespace Ui { class MainWindow; }
 
@@ -59,8 +59,7 @@ private:
     Ui::MainWindow *ui;
     std::unique_ptr<NotebookStore> m_store;
     AppSettings *m_settings;
-    QLabel *m_saveLabel = nullptr;
-    QLabel *m_syncLabel = nullptr;
+    StatusBarContent *m_statusContent = nullptr;
     QTimer *m_previewTimer = nullptr;
     QString m_currentNoteId;
     bool m_dirty = false;

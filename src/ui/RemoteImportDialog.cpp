@@ -9,7 +9,6 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QMessageBox>
 #include <QRegularExpression>
 #include <QThread>
 #include <QUuid>
@@ -18,7 +17,6 @@ RemoteImportDialog::RemoteImportDialog(AppSettings *settings, QWidget *parent)
     : QDialog(parent), ui(new Ui::RemoteImportDialog), m_settings(settings)
 {
     ui->setupUi(this);
-    ui->progressBar->setRange(0, 0);
     connect(ui->queryButton, &QPushButton::clicked, this, &RemoteImportDialog::queryRemote);
     connect(ui->importButton, &QPushButton::clicked, this, &RemoteImportDialog::importRemote);
     connect(ui->closeButton, &QPushButton::clicked, this, [this] {

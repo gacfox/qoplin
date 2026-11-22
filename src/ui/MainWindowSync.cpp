@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "ui_MainWindow.h"
 #include "SyncDialog.h"
+#include "StatusBarContent.h"
 #include "storage/AppSettings.h"
 #include "storage/NotebookStore.h"
 #include "sync/SyncWorker.h"
@@ -51,7 +52,7 @@ void MainWindow::startSync(const QString &serverPassword, const QString &masterP
     m_syncWorker->moveToThread(m_syncThread);
     connect(m_syncThread, &QThread::started, m_syncWorker, &SyncWorker::start);
     connect(m_syncWorker, &SyncWorker::progress, this, [this](const QString &message) {
-        m_syncLabel->setText(message);
+        m_statusContent->setSyncText(message);
     });
     connect(m_syncWorker, &SyncWorker::finished, this, &MainWindow::syncFinished);
     connect(m_syncWorker, &SyncWorker::finished, m_syncThread, &QThread::quit);
@@ -70,13 +71,13 @@ void MainWindow::startSync(const QString &serverPassword, const QString &masterP
     ui->actionBack->setEnabled(false);
     ui->actionSync->setEnabled(false);
     ui->actionSyncSettings->setEnabled(false);
-    m_syncLabel->setText(tr("正在准备同步…"));
+    m_statusContent->setSyncText(tr("正在准备同步…"));
     m_syncThread->start();
 }
 
 void MainWindow::syncFinished(bool success, const QString &message, int uploaded, int downloaded)
 {
-    m_syncLabel->setText(success ? QString() : tr("同步失败"));
+    m_statusContent->setSyncText(success ? QString() : tr("同步失败"));
     if (success) {
         ui->statusBar->showMessage(tr("同步完成：上传 %1 项，下载 %2 项。")
             .arg(uploaded).arg(downloaded), 8000);
@@ -89,7 +90,7 @@ void MainWindow::syncFinished(bool success, const QString &message, int uploaded
     rebuildTree(current);
     if (!current.isEmpty() && m_store->contains(current) && !m_store->node(current).deleted) {
         loadNote(current);
-        m_saveLabel->setText(success ? tr("已保存并同步") : tr("已保存"));
+        m_statusContent->setSaveText(success ? tr("已保存并同步") : tr("已保存"));
     } else if (!current.isEmpty()) {
         clearEditor();
     }

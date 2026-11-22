@@ -8,6 +8,7 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -89,10 +90,12 @@ void UiSmokeTest::editPreviewAndManualSave()
         QCOMPARE(title->sizeHint().height(), mode->sizeHint().height());
         auto *saveLabel = window.findChild<QLabel *>(QStringLiteral("statusSaveLabel"));
         QVERIFY(saveLabel);
-        QVERIFY(!window.findChild<QLabel *>(QStringLiteral("statusCountLabel")));
         QVERIFY(saveLabel->alignment() & Qt::AlignVCenter);
         QVERIFY(saveLabel->alignment() & Qt::AlignLeft);
-        QVERIFY(saveLabel->contentsMargins().left() >= 8);
+        auto *statusContent = window.findChild<QWidget *>(QStringLiteral("StatusBarContent"));
+        QVERIFY(statusContent);
+        QVERIFY(statusContent->layout()->contentsMargins().left() >= 8);
+        QVERIFY(!window.findChild<QLabel *>(QStringLiteral("emptyLabel")));
         QCOMPARE(tree->topLevelItemCount(), 1);
         QTreeWidgetItem *noteItem = tree->topLevelItem(0)->child(0);
         QTreeWidgetItem *secondItem = tree->topLevelItem(0)->child(1);

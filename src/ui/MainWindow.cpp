@@ -1,18 +1,16 @@
 #include "MainWindow.h"
 #include "ui_MainWindow.h"
 #include "SettingsDialog.h"
+#include "StatusBarContent.h"
 #include "storage/AppSettings.h"
 #include "storage/NotebookStore.h"
 
 #include <QAbstractItemModel>
 #include <QActionGroup>
 #include <QCloseEvent>
-#include <QFontDatabase>
 #include <QInputDialog>
-#include <QLabel>
 #include <QMenu>
 #include <QMessageBox>
-#include <QScrollBar>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QTimer>
@@ -42,11 +40,9 @@ MainWindow::MainWindow(NotebookStore *store, AppSettings *settings, QWidget *par
     : QMainWindow(parent), ui(new Ui::MainWindow), m_store(store), m_settings(settings)
 {
     ui->setupUi(this);
+    // QMainWindow reapplies the active style's toolbar defaults during setupUi().
     ui->toolBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
     ui->toolBar->setIconSize(QSize(16, 16));
-    QFont titleFont = ui->noteTitleEdit->font();
-    titleFont.setWeight(QFont::DemiBold);
-    ui->noteTitleEdit->setFont(titleFont);
     setWindowTitle(QStringLiteral("%1[*] — Qoplin").arg(m_store->name()));
     ui->mainSplitter->setSizes({240, 760});
     ui->editorSplitter->setSizes({480, 480});
@@ -65,18 +61,8 @@ MainWindow::MainWindow(NotebookStore *store, AppSettings *settings, QWidget *par
         m_settings->setEditorWordWrap(enabled);
     });
 
-    m_syncLabel = new QLabel(this);
-    m_syncLabel->setObjectName(QStringLiteral("statusSyncLabel"));
-    m_syncLabel->setContentsMargins(4, 2, 4, 2);
-    m_syncLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_saveLabel = new QLabel(tr("未选择笔记"), this);
-    m_saveLabel->setObjectName(QStringLiteral("statusSaveLabel"));
-    m_saveLabel->setContentsMargins(8, 2, 4, 2);
-    m_saveLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    ui->statusBar->setMinimumHeight(28);
-    ui->statusBar->setContentsMargins(0, 2, 0, 2);
-    ui->statusBar->addWidget(m_saveLabel);
-    ui->statusBar->addPermanentWidget(m_syncLabel);
+    m_statusContent = new StatusBarContent(ui->statusBar);
+    ui->statusBar->addWidget(m_statusContent, 1);
 
     m_previewTimer = new QTimer(this);
     m_previewTimer->setSingleShot(true);
@@ -268,7 +254,7 @@ void MainWindow::clearEditor()
     ui->preview->clear();
     m_loading = false;
     setEditorAvailable(false);
-    m_saveLabel->setText(tr("未选择笔记"));
+    m_statusContent->setSaveText(tr("未选择笔记"));
 }
 
 void MainWindow::loadNote(const QString &id)
@@ -310,7 +296,7 @@ bool MainWindow::saveCurrentNote()
         return false;
     }
     if (m_dirty && !m_store->writeNote(m_currentNoteId, ui->editor->toPlainText(), &error)) {
-        m_saveLabel->setText(tr("保存失败"));
+        m_statusContent->setSaveText(tr("保存失败"));
         ui->statusBar->showMessage(error, 10000);
         return false;
     }
@@ -327,7 +313,7 @@ void MainWindow::setDirty(bool dirty)
     setWindowModified(dirty);
     ui->actionSave->setEnabled(dirty && !m_currentNoteId.isEmpty());
     if (!m_currentNoteId.isEmpty())
-        m_saveLabel->setText(dirty ? tr("未保存") : tr("已保存"));
+        m_statusContent->setSaveText(dirty ? tr("未保存") : tr("已保存"));
 }
 
 MainWindow::UnsavedAction MainWindow::resolveUnsavedChanges()

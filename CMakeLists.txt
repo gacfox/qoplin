@@ -76,6 +76,9 @@ qt_add_executable(qoplin WIN32
     src/ui/MainWindowSync.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.ui
+    src/ui/StatusBarContent.cpp
+    src/ui/StatusBarContent.h
+    src/ui/StatusBarContent.ui
     src/ui/NotebookDialog.cpp
     src/ui/NotebookDialog.h
     src/ui/NotebookDialog.ui
@@ -126,6 +129,9 @@ if(BUILD_TESTING)
         src/ui/MainWindowSync.cpp
         src/ui/MainWindow.h
         src/ui/MainWindow.ui
+        src/ui/StatusBarContent.cpp
+        src/ui/StatusBarContent.h
+        src/ui/StatusBarContent.ui
         src/ui/RemoteImportDialog.cpp
         src/ui/RemoteImportDialog.h
         src/ui/RemoteImportDialog.ui
