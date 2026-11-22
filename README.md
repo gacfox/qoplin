@@ -2,6 +2,8 @@
 
 Qoplin 是一个轻量级笔记程序，支持端到端加密和基于 WebDAV 的内容同步。
 
+![截图](https://github.com/user-attachments/assets/10804e89-20cb-432f-b298-cde55e69af0d)
+
 ## 功能
 
 - 新建、打开、重命名和移除笔记本，支持从 WebDAV 远程导入。
