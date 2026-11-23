@@ -16,7 +16,7 @@ public:
     ~SyncDialog() override;
 
 signals:
-    void syncRequested(const QString &serverPassword, const QString &masterPassword);
+    void syncRequested(const QString &serverPassword);
 
 private:
     bool saveSettings();

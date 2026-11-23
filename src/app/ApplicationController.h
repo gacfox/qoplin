@@ -17,7 +17,8 @@ public:
 private:
     void showStart();
     void openNotebook(const QString &rootPath);
-    void createNotebook(const QString &name, const QString &rootPath);
+    void openNotebookWithPassword(const QString &rootPath, const QString &masterPassword);
+    void createNotebook(const QString &name, const QString &rootPath, const QString &masterPassword);
 
     AppSettings m_settings;
     StartWindow *m_startWindow = nullptr;

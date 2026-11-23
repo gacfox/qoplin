@@ -30,6 +30,8 @@ RemoteImportDialog::RemoteImportDialog(AppSettings *settings, QWidget *parent)
 
 RemoteImportDialog::~RemoteImportDialog() { delete ui; }
 
+QString RemoteImportDialog::masterPassword() const { return ui->masterPasswordEdit->text(); }
+
 bool RemoteImportDialog::validateServer()
 {
     const QUrl url(ui->endpointEdit->text().trimmed());
@@ -136,10 +138,9 @@ void RemoteImportDialog::importRemote()
             m_importSucceeded = true;
             NotebookStore store;
             QString error;
-            if (store.open(localRootPath, &error)) {
+            if (store.open(localRootPath, ui->masterPasswordEdit->text(), m_settings->deviceId(), &error)) {
                 SyncSettings saved = config;
                 saved.serverPassword = ui->passwordEdit->text();
-                saved.masterPassword = ui->masterPasswordEdit->text();
                 m_settings->setSyncSettings(store.id(), saved);
             } else {
                 m_importSucceeded = false;

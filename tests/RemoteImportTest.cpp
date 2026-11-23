@@ -143,7 +143,7 @@ bool seedNotebook(MockWebDavServer *server, const QString &notebookId,
     note.parentId = folderId;
     note.type = NoteNode::Type::Note;
     note.title = QStringLiteral("Remote note");
-    note.fileName = noteId + QStringLiteral(".md");
+    note.fileName = noteId + QStringLiteral(".bin");
     note.createdAt = 11;
     note.updatedAt = 21;
     note.writerId = QStringLiteral("remote-writer");
@@ -286,7 +286,7 @@ void RemoteImportTest::importsEncryptedNotebook()
     QCOMPARE(result.importedObjects, 2);
 
     NotebookStore store;
-    QVERIFY2(store.open(target, &error), qPrintable(error));
+    QVERIFY2(store.open(target, QStringLiteral("master password"), QStringLiteral("local-writer"), &error), qPrintable(error));
     QCOMPARE(store.id(), id);
     QCOMPARE(store.name(), QStringLiteral("Manifest name"));
     QCOMPARE(store.node(QStringLiteral("ffffffff-ffff-4fff-bfff-ffffffffffff")).title,
@@ -298,7 +298,7 @@ void RemoteImportTest::importsEncryptedNotebook()
     QVERIFY(!second.success);
     QCOMPARE(second.importedObjects, 0);
     NotebookStore original;
-    QVERIFY(original.open(target, &error));
+    QVERIFY(original.open(target, QStringLiteral("master password"), QStringLiteral("local-writer"), &error));
     QCOMPARE(original.name(), QStringLiteral("Manifest name"));
 }
 

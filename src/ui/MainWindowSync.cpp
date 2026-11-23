@@ -27,14 +27,14 @@ void MainWindow::synchronizeNow()
         return;
     }
     const SyncSettings config = m_settings->syncSettings(m_store->id());
-    if (!config.enabled || config.endpoint.trimmed().isEmpty() || config.masterPassword.isEmpty()) {
+    if (!config.enabled || config.endpoint.trimmed().isEmpty() || m_store->masterPassword().isEmpty()) {
         openSyncDialog();
         return;
     }
-    startSync(config.serverPassword, config.masterPassword);
+    startSync(config.serverPassword);
 }
 
-void MainWindow::startSync(const QString &serverPassword, const QString &masterPassword)
+void MainWindow::startSync(const QString &serverPassword)
 {
     if (m_syncThread) return;
     const UnsavedAction unsavedAction = resolveUnsavedChanges();
@@ -48,7 +48,7 @@ void MainWindow::startSync(const QString &serverPassword, const QString &masterP
 
     m_syncThread = new QThread(this);
     m_syncWorker = new SyncWorker(m_store.get());
-    m_syncWorker->configure(config, serverPassword, masterPassword);
+    m_syncWorker->configure(config, serverPassword, m_store->masterPassword());
     m_syncWorker->moveToThread(m_syncThread);
     connect(m_syncThread, &QThread::started, m_syncWorker, &SyncWorker::start);
     connect(m_syncWorker, &SyncWorker::progress, this, [this](const QString &message) {

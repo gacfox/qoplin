@@ -476,7 +476,7 @@ void RemoteImportWorker::start()
 
     emit progress(QStringLiteral("Creating the local notebook."));
     NotebookStore store;
-    if (!store.createWithId(stagingPath, notebookName, m_remoteNotebookId, m_writerId, &error)) {
+    if (!store.createWithId(stagingPath, notebookName, m_remoteNotebookId, m_writerId, m_masterPassword, &error)) {
         complete(false, error, {}, 0);
         return;
     }

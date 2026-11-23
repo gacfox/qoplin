@@ -13,6 +13,7 @@ public:
 
     QString notebookName() const;
     QString rootPath() const;
+    QString masterPassword() const;
     void accept() override;
 
 private:

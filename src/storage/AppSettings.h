@@ -13,7 +13,6 @@ struct SyncSettings
     QString remotePath = QStringLiteral("Qoplin");
     QString userName;
     QString serverPassword;
-    QString masterPassword;
 };
 
 class AppSettings
@@ -24,7 +23,6 @@ public:
     QList<NotebookInfo> notebooks() const;
     void registerNotebook(const NotebookInfo &info);
     void unregisterNotebook(const QString &rootPath);
-    void renameNotebook(const QString &rootPath, const QString &name);
     void touchNotebook(const QString &rootPath);
     void removeMissingNotebooks();
 

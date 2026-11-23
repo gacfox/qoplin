@@ -22,7 +22,6 @@ SyncDialog::SyncDialog(NotebookStore *store, AppSettings *settings, QWidget *par
     ui->remotePathEdit->setText(config.remotePath);
     ui->userEdit->setText(config.userName);
     ui->passwordEdit->setText(config.serverPassword);
-    ui->masterPasswordEdit->setText(config.masterPassword);
 
     connect(ui->closeButton, &QPushButton::clicked, this, &QDialog::reject);
     connect(ui->saveButton, &QPushButton::clicked, this, [this] {
@@ -30,7 +29,7 @@ SyncDialog::SyncDialog(NotebookStore *store, AppSettings *settings, QWidget *par
     });
     connect(ui->syncButton, &QPushButton::clicked, this, [this] {
         if (!saveSettings() || !validateForSync()) return;
-        emit syncRequested(ui->passwordEdit->text(), ui->masterPasswordEdit->text());
+        emit syncRequested(ui->passwordEdit->text());
         accept();
     });
     connect(ui->testButton, &QPushButton::clicked, this, &SyncDialog::testConnection);
@@ -51,7 +50,6 @@ bool SyncDialog::saveSettings()
     config.remotePath = ui->remotePathEdit->text().trimmed().remove(QRegularExpression(QStringLiteral("^[/]+|[/]+$")));
     config.userName = ui->userEdit->text().trimmed();
     config.serverPassword = ui->passwordEdit->text();
-    config.masterPassword = ui->masterPasswordEdit->text();
     if (config.remotePath.isEmpty()) config.remotePath = QStringLiteral("Qoplin");
     if (config.enabled && config.endpoint.isEmpty()) {
         ui->messageLabel->setText(tr("启用同步前请填写 WebDAV 地址。"));
@@ -70,10 +68,6 @@ bool SyncDialog::validateForSync()
     const QUrl url(ui->endpointEdit->text().trimmed());
     if (!url.isValid() || (url.scheme() != QStringLiteral("https") && url.scheme() != QStringLiteral("http")) || url.host().isEmpty()) {
         ui->messageLabel->setText(tr("请输入有效的 HTTP(S) WebDAV 地址。"));
-        return false;
-    }
-    if (ui->masterPasswordEdit->text().size() < 8) {
-        ui->messageLabel->setText(tr("主密码至少需要 8 个字符。忘记主密码将无法恢复远端数据。"));
         return false;
     }
     if (url.scheme() == QStringLiteral("http")) {

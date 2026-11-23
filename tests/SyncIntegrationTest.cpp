@@ -143,10 +143,10 @@ void SyncIntegrationTest::twoCopiesSynchronize()
 
     NotebookStore first;
     QString error;
-    QVERIFY(first.create(temp.path() + QStringLiteral("/first"), QStringLiteral("Sync"), QStringLiteral("device-a"), &error));
+    QVERIFY(first.create(temp.path() + QStringLiteral("/first"), QStringLiteral("Sync"), QStringLiteral("device-a"), QStringLiteral("sync master password"), &error));
     QVERIFY(copyDirectory(temp.path() + QStringLiteral("/first"), temp.path() + QStringLiteral("/second")));
     NotebookStore second;
-    QVERIFY(second.open(temp.path() + QStringLiteral("/second"), &error));
+    QVERIFY(second.open(temp.path() + QStringLiteral("/second"), QStringLiteral("sync master password"), QStringLiteral("device-b"), &error));
     second.setWriterId(QStringLiteral("device-b"));
     QCOMPARE(first.id(), second.id());
 

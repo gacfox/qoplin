@@ -1,9 +1,11 @@
 #include "ApplicationController.h"
 #include "ui/MainWindow.h"
 #include "ui/StartWindow.h"
+#include "ui/UnlockNotebookDialog.h"
 #include "storage/NotebookStore.h"
 
 #include <QDateTime>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QTimer>
 
@@ -27,6 +29,7 @@ void ApplicationController::showStart()
         m_startWindow->setAttribute(Qt::WA_DeleteOnClose);
         connect(m_startWindow, &StartWindow::openRequested, this, &ApplicationController::openNotebook);
         connect(m_startWindow, &StartWindow::createRequested, this, &ApplicationController::createNotebook);
+        connect(m_startWindow, &StartWindow::importedRequested, this, &ApplicationController::openNotebookWithPassword);
     }
     m_startWindow->refreshNotebooks();
     m_startWindow->show();
@@ -35,13 +38,34 @@ void ApplicationController::showStart()
 
 void ApplicationController::openNotebook(const QString &rootPath)
 {
-    auto store = std::make_unique<NotebookStore>();
-    QString error;
-    if (!store->open(rootPath, &error)) {
+    UnlockNotebookDialog dialog(m_startWindow);
+    dialog.setNotebookName(QFileInfo(rootPath).fileName());
+    while (true) {
+        if (dialog.exec() != QDialog::Accepted) return;
+        QString error;
+        NotebookStore probe;
+        if (probe.open(rootPath, dialog.masterPassword(), m_settings.deviceId(), &error)) {
+            openNotebookWithPassword(rootPath, dialog.masterPassword());
+            return;
+        }
+        if (error.contains(QStringLiteral("password"), Qt::CaseInsensitive)
+            || error.contains(QStringLiteral("authentication"), Qt::CaseInsensitive)) {
+            dialog.showAuthenticationError();
+            continue;
+        }
         QMessageBox::critical(m_startWindow, tr("打开笔记本失败"), error);
         return;
     }
-    store->setWriterId(m_settings.deviceId());
+}
+
+void ApplicationController::openNotebookWithPassword(const QString &rootPath, const QString &masterPassword)
+{
+    auto store = std::make_unique<NotebookStore>();
+    QString error;
+    if (!store->open(rootPath, masterPassword, m_settings.deviceId(), &error)) {
+        QMessageBox::critical(m_startWindow, tr("打开笔记本失败"), error);
+        return;
+    }
     const QString id = store->id();
     const QString name = store->name();
     NotebookInfo info{id, name, rootPath, QDateTime::currentMSecsSinceEpoch()};
@@ -62,11 +86,11 @@ void ApplicationController::openNotebook(const QString &rootPath)
     m_mainWindow->show();
 }
 
-void ApplicationController::createNotebook(const QString &name, const QString &rootPath)
+void ApplicationController::createNotebook(const QString &name, const QString &rootPath, const QString &masterPassword)
 {
     auto store = std::make_unique<NotebookStore>();
     QString error;
-    if (!store->create(rootPath, name, m_settings.deviceId(), &error)) {
+    if (!store->create(rootPath, name, m_settings.deviceId(), masterPassword, &error)) {
         QMessageBox::critical(m_startWindow, tr("新建笔记本失败"), error);
         return;
     }

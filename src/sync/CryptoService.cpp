@@ -15,7 +15,13 @@ constexpr int kFormatVersion = 1;
 constexpr int kMaximumOpsLimit = 32;
 constexpr quint64 kMaximumMemLimit = 1073741824;
 
-const QByteArray kKeyCheckContext = QByteArrayLiteral("qoplin/header/key-check/v1");
+const QByteArray kRemoteFormat = QByteArrayLiteral("qoplin-encrypted-webdav");
+const QByteArray kLocalFormat = QByteArrayLiteral("qoplin-encrypted-local");
+
+const QByteArray kRemoteKeyCheckContext = QByteArrayLiteral("qoplin/header/key-check/v1");
+// Local notebooks verify their header under a separate context, so a header of one
+// format can never satisfy the key check of the other.
+const QByteArray kLocalKeyCheckContext = QByteArrayLiteral("qoplin/local/header/key-check/v1");
 const QByteArray kKeyCheckPlainText = QByteArrayLiteral("qoplin-key-check-v1");
 
 void wipe(QByteArray &bytes)
@@ -89,6 +95,11 @@ quint64 CryptoService::defaultMemLimit()
     return crypto_pwhash_MEMLIMIT_INTERACTIVE;
 }
 
+QString CryptoService::headerFormat(bool local)
+{
+    return QString::fromLatin1(local ? kLocalFormat : kRemoteFormat);
+}
+
 bool CryptoService::setError(QString *error, const QString &message)
 {
     if (error)
@@ -101,8 +112,13 @@ void CryptoService::clearKey()
     wipe(m_key);
 }
 
+void CryptoService::clear()
+{
+    clearKey();
+}
+
 bool CryptoService::deriveKey(const QString &masterPassword, const QByteArray &salt,
-                              quint64 opsLimit, quint64 memLimit, QString *error)
+                               quint64 opsLimit, quint64 memLimit, QString *error)
 {
     clearKey();
     if (masterPassword.isEmpty())
@@ -134,13 +150,15 @@ bool CryptoService::deriveKey(const QString &masterPassword, const QByteArray &s
 }
 
 bool CryptoService::createHeader(const QString &masterPassword, QJsonObject *header,
-                                 QString *error)
+                                  QString *error, bool local)
 {
     if (!header)
         return setError(error, QStringLiteral("A header output object is required."));
     *header = QJsonObject();
     if (!isAvailable(error))
         return false;
+
+    const QByteArray keyCheckContext = local ? kLocalKeyCheckContext : kRemoteKeyCheckContext;
 
     QByteArray salt(crypto_pwhash_SALTBYTES, Qt::Uninitialized);
     randombytes_buf(salt.data(), static_cast<std::size_t>(salt.size()));
@@ -150,8 +168,9 @@ bool CryptoService::createHeader(const QString &masterPassword, QJsonObject *hea
     }
 
     QByteArray encryptedCheck;
-    if (!encrypt(kKeyCheckPlainText, kKeyCheckContext, &encryptedCheck, error)) {
+    if (!encrypt(kKeyCheckPlainText, keyCheckContext, &encryptedCheck, error)) {
         wipe(salt);
+        wipe(encryptedCheck);
         clearKey();
         return false;
     }
@@ -164,7 +183,7 @@ bool CryptoService::createHeader(const QString &masterPassword, QJsonObject *hea
     wipe(encryptedCheck);
 
     QJsonObject result;
-    result.insert(QStringLiteral("format"), QStringLiteral("qoplin-encrypted-webdav"));
+    result.insert(QStringLiteral("format"), headerFormat(local));
     result.insert(QStringLiteral("version"), kFormatVersion);
     result.insert(QStringLiteral("kdf"), QStringLiteral("Argon2id"));
     result.insert(QStringLiteral("salt"), QString::fromLatin1(salt.toBase64()));
@@ -179,28 +198,30 @@ bool CryptoService::createHeader(const QString &masterPassword, QJsonObject *hea
 }
 
 bool CryptoService::initializeFromHeader(const QJsonObject &header,
-                                         const QString &masterPassword, QString *error)
+                                          const QString &masterPassword, QString *error, bool local)
 {
     clearKey();
-    if (header.value(QStringLiteral("format")).toString()
-            != QStringLiteral("qoplin-encrypted-webdav")
+    const QString scope = local ? QStringLiteral("local") : QStringLiteral("remote");
+    const QJsonValue format = header.value(QStringLiteral("format"));
+    if (!format.isString() || format.toString() != headerFormat(local)
         || header.value(QStringLiteral("version")).toInt(-1) != kFormatVersion
         || header.value(QStringLiteral("kdf")).toString() != QStringLiteral("Argon2id")) {
-        return setError(error, QStringLiteral("The remote encryption header has an unsupported format or KDF."));
+        return setError(error, QStringLiteral("The %1 encryption header has an unsupported format or KDF.")
+                                .arg(scope));
     }
 
     bool ok = false;
     QByteArray salt = decodeBase64Field(header, QStringLiteral("salt"), &ok);
     if (!ok || salt.size() != crypto_pwhash_SALTBYTES) {
         wipe(salt);
-        return setError(error, QStringLiteral("The remote encryption header contains an invalid salt."));
+        return setError(error, QStringLiteral("The %1 encryption header contains an invalid salt.").arg(scope));
     }
     quint64 opsLimit = 0;
     quint64 memLimit = 0;
     if (!readUnsigned(header, QStringLiteral("opsLimit"), &opsLimit)
         || !readUnsigned(header, QStringLiteral("memLimit"), &memLimit)) {
         wipe(salt);
-        return setError(error, QStringLiteral("The remote encryption header contains invalid KDF parameters."));
+        return setError(error, QStringLiteral("The %1 encryption header contains invalid KDF parameters.").arg(scope));
     }
     if (!deriveKey(masterPassword, salt, opsLimit, memLimit, error)) {
         wipe(salt);
@@ -211,26 +232,33 @@ bool CryptoService::initializeFromHeader(const QJsonObject &header,
     const QJsonValue checkValue = header.value(QStringLiteral("keyCheck"));
     if (!checkValue.isObject()) {
         clearKey();
-        return setError(error, QStringLiteral("The remote encryption header has no key check."));
+        return setError(error, QStringLiteral("The %1 encryption header has no key check.").arg(scope));
     }
     const QJsonObject check = checkValue.toObject();
-    const QByteArray nonce = decodeBase64Field(check, QStringLiteral("nonce"), &ok);
-    const QByteArray encrypted = decodeBase64Field(check, QStringLiteral("ciphertext"), &ok);
+    QByteArray nonce = decodeBase64Field(check, QStringLiteral("nonce"), &ok);
+    QByteArray encrypted = decodeBase64Field(check, QStringLiteral("ciphertext"), &ok);
     if (!ok || nonce.size() != crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
         || encrypted.size() < crypto_aead_xchacha20poly1305_ietf_ABYTES) {
+        wipe(nonce);
+        wipe(encrypted);
         clearKey();
-        return setError(error, QStringLiteral("The remote encryption header contains an invalid key check."));
+        return setError(error, QStringLiteral("The %1 encryption header contains an invalid key check.").arg(scope));
     }
 
     QByteArray combined = nonce + encrypted;
+    QByteArray nonceToWipe = nonce;
+    QByteArray encryptedToWipe = encrypted;
+    wipe(nonceToWipe);
+    wipe(encryptedToWipe);
     QByteArray plainText;
-    const bool decrypted = decrypt(combined, kKeyCheckContext, &plainText, nullptr);
+    const bool decrypted = decrypt(combined, local ? kLocalKeyCheckContext : kRemoteKeyCheckContext,
+                                   &plainText, nullptr);
     wipe(combined);
     const bool valid = decrypted && plainText == kKeyCheckPlainText;
     wipe(plainText);
     if (!valid) {
         clearKey();
-        return setError(error, QStringLiteral("The master password is incorrect or the remote header is damaged."));
+        return setError(error, QStringLiteral("The master password is incorrect or the %1 header is damaged.").arg(scope));
     }
     if (error)
         error->clear();
@@ -238,7 +266,7 @@ bool CryptoService::initializeFromHeader(const QJsonObject &header,
 }
 
 bool CryptoService::encrypt(const QByteArray &plainText, const QByteArray &associatedData,
-                            QByteArray *cipherText, QString *error) const
+                             QByteArray *cipherText, QString *error) const
 {
     if (!cipherText)
         return setError(error, QStringLiteral("A ciphertext output buffer is required."));
@@ -251,6 +279,7 @@ bool CryptoService::encrypt(const QByteArray &plainText, const QByteArray &assoc
         return setError(error, QStringLiteral("The plaintext is too large to encrypt."));
     }
 
+    // A fresh random nonce is generated for every single call.
     QByteArray nonce(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES, Qt::Uninitialized);
     randombytes_buf(nonce.data(), static_cast<std::size_t>(nonce.size()));
     cipherText->resize(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES + plainText.size()
@@ -270,7 +299,7 @@ bool CryptoService::encrypt(const QByteArray &plainText, const QByteArray &assoc
         reinterpret_cast<const unsigned char *>(m_key.constData()));
     if (result != 0 || encryptedLength != static_cast<unsigned long long>(
             plainText.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES)) {
-        cipherText->clear();
+        wipe(*cipherText);
         return setError(error, QStringLiteral("XChaCha20-Poly1305 encryption failed."));
     }
     if (error)
@@ -279,7 +308,7 @@ bool CryptoService::encrypt(const QByteArray &plainText, const QByteArray &assoc
 }
 
 bool CryptoService::decrypt(const QByteArray &cipherText, const QByteArray &associatedData,
-                            QByteArray *plainText, QString *error) const
+                             QByteArray *plainText, QString *error) const
 {
     if (!plainText)
         return setError(error, QStringLiteral("A plaintext output buffer is required."));

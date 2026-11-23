@@ -82,6 +82,9 @@ qt_add_executable(qoplin WIN32
     src/ui/NotebookDialog.cpp
     src/ui/NotebookDialog.h
     src/ui/NotebookDialog.ui
+    src/ui/UnlockNotebookDialog.cpp
+    src/ui/UnlockNotebookDialog.h
+    src/ui/UnlockNotebookDialog.ui
     src/ui/RemoteImportDialog.cpp
     src/ui/RemoteImportDialog.h
     src/ui/RemoteImportDialog.ui
@@ -103,7 +106,7 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/StorageTest.cpp")
-    qt_add_executable(storage_test tests/StorageTest.cpp)
+    qt_add_executable(storage_test tests/StorageTest.cpp tests/StorageTest.h)
     target_link_libraries(storage_test PRIVATE qoplin_core Qt6::Test)
     add_test(NAME storage_test COMMAND storage_test)
 endif()

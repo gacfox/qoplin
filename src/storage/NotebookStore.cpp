@@ -1,5 +1,7 @@
 #include "storage/NotebookStore.h"
 
+#include "sync/CryptoService.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -20,6 +22,32 @@
 namespace
 {
 constexpr int kSchemaVersion = 1;
+
+const QString kHeaderName = QStringLiteral("qoplin.json");
+const QString kIndexName = QStringLiteral(".qoplin/index.bin");
+const QString kNotesDirectory = QStringLiteral(".qoplin/notes");
+const QString kInternalDirectory = QStringLiteral(".qoplin");
+const QString kBackupSuffix = QStringLiteral(".bak");
+const QString kNoteSuffix = QStringLiteral(".bin");
+// Index file of the old plaintext notebooks; it marks an unsupported notebook.
+const QString kLegacyIndexName = QStringLiteral(".qoplin/index.json");
+
+// The associated data binds every ciphertext to the local format, its notebook, and its object.
+QByteArray indexAssociatedData(const QString &notebookId)
+{
+    return QByteArrayLiteral("qoplin/local/index/v1:") + notebookId.toUtf8();
+}
+
+QByteArray noteAssociatedData(const QString &notebookId, const QString &noteId)
+{
+    return QByteArrayLiteral("qoplin/local/note/v1:") + notebookId.toUtf8() + ':' + noteId.toUtf8();
+}
+
+QString legacyNotebookMessage()
+{
+    return QStringLiteral("This notebook uses the old unencrypted format, which is no longer "
+                          "supported. It cannot be converted; create a new encrypted notebook instead.");
+}
 
 QString normalizedUuid(const QString &value)
 {
@@ -68,6 +96,7 @@ bool validTitle(const QString &title, QString *reason)
     return true;
 }
 
+// Writes data through QSaveFile, so a crash never leaves a partially written object.
 bool writeAtomically(const QString &path, const QByteArray &data, QString *error)
 {
     QSaveFile file(path);
@@ -90,7 +119,18 @@ bool writeAtomically(const QString &path, const QByteArray &data, QString *error
     return true;
 }
 
-bool readJsonObject(const QString &path, QJsonObject *object, QString *error)
+// Stores an object and an identical backup. A backup failure is not fatal: the
+// primary copy is already committed.
+bool writeWithBackup(const QString &path, const QByteArray &data, QString *error)
+{
+    if (!writeAtomically(path, data, error))
+        return false;
+    QString backupError;
+    writeAtomically(path + kBackupSuffix, data, &backupError);
+    return true;
+}
+
+bool readFileBytes(const QString &path, QByteArray *data, QString *error)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -98,9 +138,14 @@ bool readJsonObject(const QString &path, QJsonObject *object, QString *error)
             *error = QStringLiteral("Cannot read %1: %2").arg(path, file.errorString());
         return false;
     }
+    *data = file.readAll();
+    return true;
+}
 
+bool parseJsonObject(const QByteArray &data, const QString &path, QJsonObject *object, QString *error)
+{
     QJsonParseError parseError;
-    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
         if (error) {
             *error = QStringLiteral("Invalid JSON in %1: %2")
@@ -185,14 +230,15 @@ bool normalizeNode(const NoteNode &input, NoteNode *output, QString *error)
     if (input.createdAt < 0 || input.updatedAt < 0)
         return fail(QStringLiteral("Node %1 has a negative timestamp.").arg(result.id));
 
-    const QString expectedFileName = result.id + QStringLiteral(".md");
+    // Note objects are always stored as <uuid>.bin, regardless of their title.
+    const QString expectedFileName = result.id + kNoteSuffix;
     if (result.isFolder()) {
         if (!input.fileName.isEmpty())
             return fail(QStringLiteral("Folder %1 cannot have a note file name.").arg(result.id));
         result.fileName.clear();
     } else {
         if (!input.fileName.isEmpty() && input.fileName != expectedFileName)
-            return fail(QStringLiteral("Note %1 must use the flat file name %2.")
+            return fail(QStringLiteral("Note %1 must use the encrypted file name %2.")
                             .arg(result.id, expectedFileName));
         result.fileName = expectedFileName;
     }
@@ -244,6 +290,27 @@ bool nodeOrder(const NoteNode &left, const NoteNode &right)
 }
 } // namespace
 
+NotebookStore::NotebookStore() = default;
+
+NotebookStore::~NotebookStore()
+{
+    close();
+}
+
+void NotebookStore::close()
+{
+    m_open = false;
+    // Destroying the CryptoService wipes the derived key.
+    m_crypto.reset();
+    m_masterPassword.fill(QChar::Null);
+    m_masterPassword.clear();
+    m_nodes.clear();
+    m_id.clear();
+    m_name.clear();
+    m_rootPath.clear();
+    m_writerId.clear();
+}
+
 bool NotebookStore::setError(QString *error, const QString &message)
 {
     if (error)
@@ -256,81 +323,154 @@ QString NotebookStore::internalPath(const QString &name) const
     return QDir(m_rootPath).filePath(name);
 }
 
-bool NotebookStore::create(const QString &rootPath, const QString &name,
-                           const QString &writerId, QString *error)
+QString NotebookStore::noteFilePath(const QString &noteId) const
 {
-    return createWithId(rootPath, name, QUuid::createUuid().toString(QUuid::WithoutBraces), writerId, error);
+    const QString id = normalizedUuid(noteId);
+    if (id.isEmpty())
+        return QString();
+    return internalPath(kNotesDirectory + QLatin1Char('/') + id + kNoteSuffix);
+}
+
+QString NotebookStore::notePath(const NoteNode &node) const
+{
+    return noteFilePath(node.id);
+}
+
+bool NotebookStore::writeNoteFile(const QString &noteId, const QByteArray &plainText, QString *error) const
+{
+    const QString id = normalizedUuid(noteId);
+    if (id.isEmpty())
+        return setError(error, QStringLiteral("The note has an invalid UUID."));
+    // Every call encrypts with a fresh nonce, so no two files ever share a (key, nonce) pair.
+    QByteArray cipherText;
+    if (!m_crypto->encrypt(plainText, noteAssociatedData(m_id, id), &cipherText, error))
+        return false;
+    return writeAtomically(noteFilePath(id), cipherText, error);
+}
+
+bool NotebookStore::readEncryptedJson(const QString &path, const QByteArray &associatedData,
+                                      QByteArray *cipherText, QJsonObject *object, QString *error) const
+{
+    cipherText->clear();
+    if (!readFileBytes(path, cipherText, error))
+        return false;
+    QByteArray plainText;
+    if (!m_crypto->decrypt(*cipherText, associatedData, &plainText, error))
+        return false;
+    return parseJsonObject(plainText, path, object, error);
+}
+
+bool NotebookStore::create(const QString &rootPath, const QString &name, const QString &writerId,
+                           const QString &masterPassword, QString *error)
+{
+    return createWithId(rootPath, name, QUuid::createUuid().toString(QUuid::WithoutBraces), writerId,
+                        masterPassword, error);
 }
 
 bool NotebookStore::createWithId(const QString &rootPath, const QString &name, const QString &notebookId,
-                                 const QString &writerId, QString *error)
+                                 const QString &writerId, const QString &masterPassword, QString *error)
 {
     if (error)
         error->clear();
-    m_open = false;
-    m_nodes.clear();
+    close();
 
     QString titleError;
     if (!validTitle(name, &titleError))
         return setError(error, QStringLiteral("Invalid notebook name: %1").arg(titleError));
     if (rootPath.trimmed().isEmpty())
         return setError(error, QStringLiteral("The notebook path must not be empty."));
-
     const QString cleanRoot = QDir::cleanPath(QDir(rootPath).absolutePath());
     if (QFileInfo::exists(cleanRoot) && !QFileInfo(cleanRoot).isDir())
         return setError(error, QStringLiteral("The notebook path is not a directory."));
-    if (!QDir().mkpath(cleanRoot)
-        || !QDir().mkpath(QDir(cleanRoot).filePath(QStringLiteral(".qoplin/notes"))))
+    const QString id = normalizedUuid(notebookId);
+    if (id.isEmpty())
+        return setError(error, QStringLiteral("The notebook ID is invalid."));
+    if (masterPassword.isEmpty())
+        return setError(error, QStringLiteral("The master password must not be empty."));
+    if (!CryptoService::isAvailable(error))
+        return false;
+
+    const QDir root(cleanRoot);
+    if (QFileInfo::exists(root.filePath(kHeaderName))
+        || QFileInfo::exists(root.filePath(kHeaderName + kBackupSuffix))
+        || QFileInfo::exists(root.filePath(kIndexName))
+        || QFileInfo::exists(root.filePath(kIndexName + kBackupSuffix))
+        || QFileInfo::exists(root.filePath(kLegacyIndexName))) {
+        return setError(error, QStringLiteral("A notebook already exists at this path."));
+    }
+
+    if (!QDir().mkpath(cleanRoot) || !QDir().mkpath(root.filePath(kNotesDirectory)))
         return setError(error, QStringLiteral("Cannot create the notebook directories."));
 
-    if (QFileInfo::exists(QDir(cleanRoot).filePath(QStringLiteral("qoplin.json")))
-        || QFileInfo::exists(QDir(cleanRoot).filePath(QStringLiteral(".qoplin/index.json"))))
-        return setError(error, QStringLiteral("A notebook already exists at this path."));
-
     m_rootPath = cleanRoot;
-    m_id = normalizedUuid(notebookId);
-    if (m_id.isEmpty())
-        return setError(error, QStringLiteral("The notebook ID is invalid."));
+    m_id = id;
     m_name = name;
     m_writerId = writerId.isEmpty()
                      ? QUuid::createUuid().toString(QUuid::WithoutBraces).toLower()
                      : writerId;
+    // Own a private copy, so close() can wipe this buffer rather than a shared one.
+    m_masterPassword = QString(masterPassword.constData(), masterPassword.size());
+    m_crypto = std::make_unique<CryptoService>();
 
-    if (!saveIndex(error) || !saveMetadata(error)) {
-        QFile::remove(internalPath(QStringLiteral("qoplin.json")));
-        QFile::remove(internalPath(QStringLiteral("qoplin.json.bak")));
-        QFile::remove(internalPath(QStringLiteral(".qoplin/index.json")));
-        QFile::remove(internalPath(QStringLiteral(".qoplin/index.json.bak")));
-        QDir(cleanRoot).rmdir(QStringLiteral(".qoplin/notes"));
-        QDir(cleanRoot).rmdir(QStringLiteral(".qoplin"));
-        m_open = false;
-        m_nodes.clear();
+    const auto abandon = [this, &cleanRoot] {
+        QFile::remove(internalPath(kHeaderName));
+        QFile::remove(internalPath(kHeaderName) + kBackupSuffix);
+        QFile::remove(internalPath(kIndexName));
+        QFile::remove(internalPath(kIndexName) + kBackupSuffix);
+        QDir(cleanRoot).rmdir(kNotesDirectory);
+        QDir(cleanRoot).rmdir(kInternalDirectory);
+        close();
+    };
+
+    // The crypto header exists before anything encrypted: no object can be written
+    // until the key has been derived and its check has been stored.
+    QJsonObject header;
+    if (!m_crypto->createHeader(masterPassword, &header, error, true)) {
+        abandon();
         return false;
     }
+    header.insert(QStringLiteral("id"), m_id);
+    const QByteArray headerData = QJsonDocument(header).toJson(QJsonDocument::Indented);
+    if (!writeWithBackup(internalPath(kHeaderName), headerData, error)) {
+        abandon();
+        return false;
+    }
+    if (!saveIndex(error)) {
+        abandon();
+        return false;
+    }
+
     m_open = true;
     return true;
 }
 
-bool NotebookStore::open(const QString &rootPath, QString *error)
+bool NotebookStore::open(const QString &rootPath, const QString &masterPassword, const QString &writerId,
+                         QString *error)
 {
     if (error)
         error->clear();
-    m_open = false;
-    m_nodes.clear();
-    m_id.clear();
-    m_name.clear();
-    m_writerId.clear();
+    close();
 
     if (rootPath.trimmed().isEmpty())
         return setError(error, QStringLiteral("The notebook path must not be empty."));
     const QString cleanRoot = QDir::cleanPath(QDir(rootPath).absolutePath());
     if (!QFileInfo(cleanRoot).isDir())
         return setError(error, QStringLiteral("The notebook directory does not exist."));
+    if (masterPassword.isEmpty())
+        return setError(error, QStringLiteral("The master password must not be empty."));
+    if (!CryptoService::isAvailable(error))
+        return false;
 
     m_rootPath = cleanRoot;
+    m_writerId = writerId.isEmpty()
+                     ? QUuid::createUuid().toString(QUuid::WithoutBraces).toLower()
+                     : writerId;
+    m_masterPassword = QString(masterPassword.constData(), masterPassword.size());
+    m_crypto = std::make_unique<CryptoService>();
+
+    // Any failure below discards the key, the password, and every partially loaded value.
     if (!load(error)) {
-        m_open = false;
-        m_nodes.clear();
+        close();
         return false;
     }
     m_open = true;
@@ -339,45 +479,63 @@ bool NotebookStore::open(const QString &rootPath, QString *error)
 
 bool NotebookStore::load(QString *error)
 {
-    const QString metadataPath = internalPath(QStringLiteral("qoplin.json"));
-    const QString backupPath = metadataPath + QStringLiteral(".bak");
-    QJsonObject metadata;
-    QString metadataError;
-    bool recovered = false;
-    if (!readJsonObject(metadataPath, &metadata, &metadataError)) {
-        if (!readJsonObject(backupPath, &metadata, error))
-            return setError(error, metadataError);
-        recovered = true;
+    // 1. The non-secret header. Its backup is an identical plaintext copy of the same header.
+    const QString headerPath = internalPath(kHeaderName);
+    const QString headerBackupPath = headerPath + kBackupSuffix;
+    QByteArray headerData;
+    QJsonObject header;
+    bool recoveredHeader = false;
+    QString headerError;
+    if (!readFileBytes(headerPath, &headerData, &headerError)
+        || !parseJsonObject(headerData, headerPath, &header, &headerError)) {
+        QString backupError;
+        if (!readFileBytes(headerBackupPath, &headerData, &backupError)
+            || !parseJsonObject(headerData, headerBackupPath, &header, &backupError)) {
+            if (QFileInfo::exists(internalPath(kLegacyIndexName)))
+                return setError(error, legacyNotebookMessage());
+            return setError(error, headerError);
+        }
+        recoveredHeader = true;
     }
 
-    if (metadata.value(QStringLiteral("version")).toInt(-1) != kSchemaVersion)
-        return setError(error, QStringLiteral("Unsupported notebook metadata version."));
-    const QString metadataId = normalizedUuid(metadata.value(QStringLiteral("id")).toString());
-    if (metadataId.isEmpty())
-        return setError(error, QStringLiteral("The notebook metadata has an invalid UUID."));
-    if (!metadata.value(QStringLiteral("name")).isString())
-        return setError(error, QStringLiteral("The notebook metadata has no valid name."));
-    QString titleError;
-    if (!validTitle(metadata.value(QStringLiteral("name")).toString(), &titleError))
-        return setError(error, QStringLiteral("Invalid notebook name: %1").arg(titleError));
+    // A metadata file without a crypto format belongs to an old plaintext notebook.
+    if (!header.value(QStringLiteral("format")).isString())
+        return setError(error, legacyNotebookMessage());
 
-    m_id = metadataId;
-    m_name = metadata.value(QStringLiteral("name")).toString();
-    m_writerId = metadata.value(QStringLiteral("writerId")).toString();
-    if (m_writerId.isEmpty())
-        m_writerId = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+    // 2. Validate the header, then derive and verify the key before the index is touched.
+    //    A wrong password or a header of another format leaves the key cleared.
+    const QString headerId = normalizedUuid(header.value(QStringLiteral("id")).toString());
+    if (headerId.isEmpty())
+        return setError(error, QStringLiteral("The notebook header has an invalid UUID."));
+    if (!m_crypto->initializeFromHeader(header, m_masterPassword, error, true))
+        return false;
 
-    const QString indexPath = internalPath(QStringLiteral(".qoplin/index.json"));
+    // 3. The encrypted index. The backup is only used when the primary copy cannot be
+    //    read, authenticated, or parsed; the verified ciphertext is then restored.
+    const QString indexPath = internalPath(kIndexName);
+    const QByteArray associatedData = indexAssociatedData(headerId);
+    QByteArray indexData;
     QJsonObject index;
     bool recoveredIndex = false;
-    if (!readJsonObject(indexPath, &index, error)) {
-        if (!readJsonObject(indexPath + QStringLiteral(".bak"), &index, error))
-            return false;
+    QString indexError;
+    if (!readEncryptedJson(indexPath, associatedData, &indexData, &index, &indexError)) {
+        QString backupError;
+        if (!readEncryptedJson(indexPath + kBackupSuffix, associatedData, &indexData, &index,
+                              &backupError)) {
+            return setError(error, QStringLiteral("Cannot read the encrypted node index: %1")
+                                       .arg(indexError));
+        }
         recoveredIndex = true;
     }
+
     if (index.value(QStringLiteral("version")).toInt(-1) != kSchemaVersion
         || !index.value(QStringLiteral("nodes")).isArray())
         return setError(error, QStringLiteral("Unsupported or invalid node index."));
+    if (!index.value(QStringLiteral("notebookName")).isString())
+        return setError(error, QStringLiteral("The node index has no valid notebook name."));
+    QString titleError;
+    if (!validTitle(index.value(QStringLiteral("notebookName")).toString(), &titleError))
+        return setError(error, QStringLiteral("Invalid notebook name: %1").arg(titleError));
 
     QHash<QString, NoteNode> loaded;
     const QJsonArray array = index.value(QStringLiteral("nodes")).toArray();
@@ -424,36 +582,21 @@ bool NotebookStore::load(QString *error)
     }
     if (!validateNodeGraph(loaded, error))
         return false;
+
+    // Everything is verified: publish the state.
+    m_id = headerId;
+    m_name = index.value(QStringLiteral("notebookName")).toString();
     m_nodes = loaded;
 
-    if (recovered) {
+    // Restore a recovered primary copy from the verified backup, byte for byte.
+    // This is a repair of an already consistent state, so a failure is not fatal.
+    if (recoveredHeader || recoveredIndex) {
         QString ignored;
-        writeAtomically(metadataPath,
-                        QJsonDocument(metadata).toJson(QJsonDocument::Indented), &ignored);
+        if (recoveredHeader)
+            writeAtomically(headerPath, headerData, &ignored);
+        if (recoveredIndex)
+            writeAtomically(indexPath, indexData, &ignored);
     }
-    if (!metadata.contains(QStringLiteral("writerId"))) {
-        if (!saveMetadata(error))
-            return false;
-    }
-    if (recoveredIndex && !saveIndex(error))
-        return false;
-    return true;
-}
-
-bool NotebookStore::saveMetadata(QString *error) const
-{
-    const QJsonObject metadata{
-        {QStringLiteral("version"), kSchemaVersion},
-        {QStringLiteral("id"), m_id},
-        {QStringLiteral("name"), m_name},
-        {QStringLiteral("writerId"), m_writerId}
-    };
-    const QByteArray data = QJsonDocument(metadata).toJson(QJsonDocument::Indented);
-    const QString path = internalPath(QStringLiteral("qoplin.json"));
-    if (!writeAtomically(path, data, error))
-        return false;
-    QString backupError;
-    writeAtomically(path + QStringLiteral(".bak"), data, &backupError);
     return true;
 }
 
@@ -463,17 +606,18 @@ bool NotebookStore::saveIndex(QString *error) const
     const QVector<NoteNode> ordered = nodes(true);
     for (const NoteNode &node : ordered)
         array.append(nodeToJson(node));
+    // The notebook name lives in the encrypted index; the header never contains it.
     const QJsonObject index{
         {QStringLiteral("version"), kSchemaVersion},
+        {QStringLiteral("notebookName"), m_name},
         {QStringLiteral("nodes"), array}
     };
-    const QByteArray data = QJsonDocument(index).toJson(QJsonDocument::Indented);
-    const QString path = internalPath(QStringLiteral(".qoplin/index.json"));
-    if (!writeAtomically(path, data, error))
+    // Every save encrypts with a fresh nonce. The backup is a byte-identical copy.
+    QByteArray cipherText;
+    if (!m_crypto->encrypt(QJsonDocument(index).toJson(QJsonDocument::Indented),
+                           indexAssociatedData(m_id), &cipherText, error))
         return false;
-    QString backupError;
-    writeAtomically(path + QStringLiteral(".bak"), data, &backupError);
-    return true;
+    return writeWithBackup(internalPath(kIndexName), cipherText, error);
 }
 
 QVector<NoteNode> NotebookStore::nodes(bool includeDeleted) const
@@ -542,7 +686,8 @@ bool NotebookStore::setName(const QString &name, QString *error)
         return setError(error, QStringLiteral("Invalid notebook name: %1").arg(titleError));
     const QString oldName = m_name;
     m_name = name;
-    if (!saveMetadata(error)) {
+    // Only the encrypted index changes; the non-secret header stays untouched.
+    if (!saveIndex(error)) {
         m_name = oldName;
         return false;
     }
@@ -595,7 +740,7 @@ QString NotebookStore::createNode(NoteNode::Type type, const QString &parentId,
     created.parentId = parentId.isEmpty() ? QString() : normalizedUuid(parentId);
     created.type = type;
     created.title = title;
-    created.fileName = created.isNote() ? created.id + QStringLiteral(".md") : QString();
+    created.fileName = created.isNote() ? created.id + kNoteSuffix : QString();
     created.createdAt = QDateTime::currentMSecsSinceEpoch();
     created.updatedAt = created.createdAt;
     created.writerId = m_writerId;
@@ -609,8 +754,8 @@ QString NotebookStore::createNode(NoteNode::Type type, const QString &parentId,
                             ? maximumSortOrder
                             : maximumSortOrder + 1;
 
-    if (created.isNote()
-        && !writeAtomically(notePath(created), QByteArray(), error))
+    // A new note starts as an encrypted empty document.
+    if (created.isNote() && !writeNoteFile(created.id, QByteArray(), error))
         return QString();
 
     m_nodes.insert(created.id, created);
@@ -703,14 +848,6 @@ bool NotebookStore::removeNode(const QString &id, QString *error)
     return true;
 }
 
-QString NotebookStore::notePath(const NoteNode &node) const
-{
-    const QString id = normalizedUuid(node.id);
-    if (id.isEmpty())
-        return QString();
-    return internalPath(QStringLiteral(".qoplin/notes/") + id + QStringLiteral(".md"));
-}
-
 QString NotebookStore::readNote(const QString &id, QString *error) const
 {
     if (error)
@@ -730,7 +867,10 @@ QString NotebookStore::readNote(const QString &id, QString *error) const
         setError(error, QStringLiteral("Cannot read note: %1").arg(file.errorString()));
         return QString();
     }
-    return QString::fromUtf8(file.readAll());
+    QByteArray plainText;
+    if (!m_crypto->decrypt(file.readAll(), noteAssociatedData(m_id, note.id), &plainText, error))
+        return QString();
+    return QString::fromUtf8(plainText);
 }
 
 bool NotebookStore::writeNote(const QString &id, const QString &content, QString *error)
@@ -742,14 +882,17 @@ bool NotebookStore::writeNote(const QString &id, const QString &content, QString
     auto it = m_nodes.find(normalizedUuid(id));
     if (it == m_nodes.end() || !it->isNote() || it->deleted)
         return setError(error, QStringLiteral("The note does not exist or is deleted."));
+
+    // Keep the previous ciphertext, so a rollback restores the exact bytes from disk.
     const QString path = notePath(it.value());
-    QByteArray oldContent;
+    QByteArray oldCipherText;
     QFile oldFile(path);
     if (!oldFile.open(QIODevice::ReadOnly))
         return setError(error, QStringLiteral("Cannot read the previous note content: %1").arg(oldFile.errorString()));
-    oldContent = oldFile.readAll();
+    oldCipherText = oldFile.readAll();
     oldFile.close();
-    if (!writeAtomically(path, content.toUtf8(), error))
+
+    if (!writeNoteFile(it->id, content.toUtf8(), error))
         return false;
 
     const NoteNode oldNode = it.value();
@@ -758,7 +901,7 @@ bool NotebookStore::writeNote(const QString &id, const QString &content, QString
     if (!saveIndex(error)) {
         it.value() = oldNode;
         QString rollbackError;
-        if (!writeAtomically(path, oldContent, &rollbackError) && error)
+        if (!writeAtomically(path, oldCipherText, &rollbackError) && error)
             error->append(QStringLiteral(" Content rollback also failed: %1").arg(rollbackError));
         return false;
     }
@@ -790,17 +933,18 @@ bool NotebookStore::applyRemoteNode(const NoteNode &node, const QString &content
 
     const bool writeContent = remote.isNote() && !remote.deleted;
     const QString path = notePath(remote);
-    QByteArray oldContent;
+    // The previous ciphertext is kept verbatim for a rollback; plaintext never touches disk.
+    QByteArray oldCipherText;
     bool hadOldContent = false;
     if (writeContent && QFileInfo::exists(path)) {
         QFile oldFile(path);
         if (!oldFile.open(QIODevice::ReadOnly))
             return setError(error, QStringLiteral("Cannot read the previous note content: %1").arg(oldFile.errorString()));
-        oldContent = oldFile.readAll();
+        oldCipherText = oldFile.readAll();
         oldFile.close();
         hadOldContent = true;
     }
-    if (writeContent && !writeAtomically(path, content.toUtf8(), error))
+    if (writeContent && !writeNoteFile(remote.id, content.toUtf8(), error))
         return false;
 
     const QHash<QString, NoteNode> oldNodes = m_nodes;
@@ -809,7 +953,7 @@ bool NotebookStore::applyRemoteNode(const NoteNode &node, const QString &content
         m_nodes = oldNodes;
         if (writeContent) {
             QString rollbackError;
-            const bool rolledBack = hadOldContent ? writeAtomically(path, oldContent, &rollbackError)
+            const bool rolledBack = hadOldContent ? writeAtomically(path, oldCipherText, &rollbackError)
                                                   : QFile::remove(path);
             if (!rolledBack && error)
                 error->append(QStringLiteral(" Content rollback also failed: %1").arg(rollbackError));

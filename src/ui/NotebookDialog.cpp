@@ -20,6 +20,7 @@ NotebookDialog::~NotebookDialog() { delete ui; }
 
 QString NotebookDialog::notebookName() const { return ui->nameEdit->text().trimmed(); }
 QString NotebookDialog::rootPath() const { return QDir::cleanPath(ui->pathEdit->text().trimmed()); }
+QString NotebookDialog::masterPassword() const { return ui->passwordEdit->text(); }
 
 void NotebookDialog::accept()
 {
@@ -31,6 +32,16 @@ void NotebookDialog::accept()
     if (rootPath().isEmpty()) {
         QMessageBox::warning(this, tr("新建笔记本"), tr("请选择磁盘位置。"));
         ui->browseButton->setFocus();
+        return;
+    }
+    if (ui->passwordEdit->text().size() < 8) {
+        QMessageBox::warning(this, tr("新建笔记本"), tr("主密码至少需要 8 个字符。"));
+        ui->passwordEdit->setFocus();
+        return;
+    }
+    if (ui->passwordEdit->text() != ui->confirmEdit->text()) {
+        QMessageBox::warning(this, tr("新建笔记本"), tr("两次输入的主密码不一致。"));
+        ui->confirmEdit->setFocus();
         return;
     }
     QDialog::accept();

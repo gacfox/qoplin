@@ -3,6 +3,7 @@
 #include "NotebookDialog.h"
 #include "RemoteImportDialog.h"
 #include "SettingsDialog.h"
+#include "UnlockNotebookDialog.h"
 #include "storage/AppSettings.h"
 #include "storage/NotebookStore.h"
 
@@ -30,7 +31,7 @@ StartWindow::StartWindow(AppSettings *settings, QWidget *parent)
     connect(ui->newButton, &QPushButton::clicked, this, [this] {
         NotebookDialog dialog(this);
         if (dialog.exec() == QDialog::Accepted)
-            emit createRequested(dialog.notebookName(), dialog.rootPath());
+            emit createRequested(dialog.notebookName(), dialog.rootPath(), dialog.masterPassword());
     });
     connect(ui->existingButton, &QPushButton::clicked, this, [this] {
         const QString path = QFileDialog::getExistingDirectory(this, tr("打开已有 Qoplin 笔记本"));
@@ -39,23 +40,29 @@ StartWindow::StartWindow(AppSettings *settings, QWidget *parent)
     connect(ui->importButton, &QPushButton::clicked, this, [this] {
         RemoteImportDialog dialog(m_settings, this);
         if (dialog.exec() == QDialog::Accepted && !dialog.importedPath().isEmpty())
-            emit openRequested(dialog.importedPath());
+            emit importedRequested(dialog.importedPath(), dialog.masterPassword());
     });
     connect(ui->renameButton, &QPushButton::clicked, this, [this] {
         const QString path = selectedPath();
         if (path.isEmpty()) return;
-        QListWidgetItem *item = ui->notebookList->currentItem();
-        const QString oldName = item->data(Qt::UserRole + 1).toString();
+        UnlockNotebookDialog unlock(this);
+        unlock.setNotebookName(QDir(path).dirName());
+        if (unlock.exec() != QDialog::Accepted) return;
+        NotebookStore store;
+        QString error;
+        if (!store.open(path, unlock.masterPassword(), m_settings->deviceId(), &error)) {
+            QMessageBox::critical(this, tr("解锁失败"), error);
+            return;
+        }
+        const QString oldName = store.name();
         bool ok = false;
         const QString name = QInputDialog::getText(this, tr("重命名笔记本"), tr("名称："), QLineEdit::Normal, oldName, &ok).trimmed();
         if (!ok || name.isEmpty() || name == oldName) return;
-        NotebookStore store;
-        QString error;
-        if (!store.open(path, &error) || !store.setName(name, &error)) {
+        if (!store.setName(name, &error)) {
             QMessageBox::critical(this, tr("重命名失败"), error);
             return;
         }
-        m_settings->renameNotebook(path, name);
+
         refreshNotebooks();
     });
     connect(ui->removeButton, &QPushButton::clicked, this, [this] {

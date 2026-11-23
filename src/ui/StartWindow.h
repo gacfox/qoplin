@@ -15,7 +15,8 @@ public:
 
 signals:
     void openRequested(const QString &rootPath);
-    void createRequested(const QString &name, const QString &rootPath);
+    void createRequested(const QString &name, const QString &rootPath, const QString &masterPassword);
+    void importedRequested(const QString &rootPath, const QString &masterPassword);
 
 private:
     QString selectedPath() const;

@@ -50,7 +50,7 @@ void UiSmokeTest::editPreviewAndManualSave()
     QVERIFY(temp.isValid());
     auto *store = new NotebookStore;
     QString error;
-    QVERIFY2(store->create(temp.path(), QStringLiteral("UI Test"), QStringLiteral("test-device"), &error), qPrintable(error));
+    QVERIFY2(store->create(temp.path(), QStringLiteral("UI Test"), QStringLiteral("test-device"), QStringLiteral("test master password"), &error), qPrintable(error));
     const QString folder = store->createNode(NoteNode::Type::Folder, QString(), QStringLiteral("Folder"), &error);
     const QString note = store->createNode(NoteNode::Type::Note, folder, QStringLiteral("Note"), &error);
     const QString secondNote = store->createNode(NoteNode::Type::Note, folder, QStringLiteral("Second"), &error);
@@ -167,7 +167,7 @@ void UiSmokeTest::editPreviewAndManualSave()
     }
 
     auto *reopenedStore = new NotebookStore;
-    QVERIFY2(reopenedStore->open(temp.path(), &error), qPrintable(error));
+    QVERIFY2(reopenedStore->open(temp.path(), QStringLiteral("test master password"), QStringLiteral("test-device"), &error), qPrintable(error));
     MainWindow restoredWindow(reopenedStore, &settings);
     auto *restoredEditor = restoredWindow.findChild<QPlainTextEdit *>(QStringLiteral("editor"));
     auto *restoredWordWrap = restoredWindow.findChild<QAction *>(QStringLiteral("actionWordWrap"));
@@ -184,7 +184,7 @@ void UiSmokeTest::codeBlockHasGrayBackground()
     QVERIFY(temp.isValid());
     auto *store = new NotebookStore;
     QString error;
-    QVERIFY(store->create(temp.path(), QStringLiteral("Code Test"), QStringLiteral("test-device"), &error));
+    QVERIFY(store->create(temp.path(), QStringLiteral("Code Test"), QStringLiteral("test-device"), QStringLiteral("test master password"), &error));
     const QString note = store->createNode(NoteNode::Type::Note, QString(), QStringLiteral("Code"), &error);
     QVERIFY(store->writeNote(note, QStringLiteral("Before\n\n```cpp\nint value = 0;\n```\n"), &error));
 

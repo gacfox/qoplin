@@ -52,7 +52,7 @@ private:
     void openSettings();
     void openSyncDialog();
     void synchronizeNow();
-    void startSync(const QString &serverPassword, const QString &masterPassword);
+    void startSync(const QString &serverPassword);
     void syncFinished(bool success, const QString &message, int uploaded, int downloaded);
     bool canLeaveEditor();
 

@@ -28,7 +28,7 @@ QList<NotebookInfo> readNotebooks(QSettings &settings)
         settings.setArrayIndex(i);
         NotebookInfo info;
         info.id = settings.value(QStringLiteral("id")).toString();
-        info.name = settings.value(QStringLiteral("name")).toString();
+        info.name = QFileInfo(info.rootPath).fileName();
         info.rootPath = settings.value(QStringLiteral("rootPath")).toString();
         info.lastOpened = settings.value(QStringLiteral("lastOpened"), 0).toLongLong();
         if (!info.rootPath.isEmpty())
@@ -46,7 +46,7 @@ void writeNotebooks(QSettings &settings, const QList<NotebookInfo> &notebooks)
         settings.setArrayIndex(i);
         const NotebookInfo &info = notebooks.at(i);
         settings.setValue(QStringLiteral("id"), info.id);
-        settings.setValue(QStringLiteral("name"), info.name);
+
         settings.setValue(QStringLiteral("rootPath"), info.rootPath);
         settings.setValue(QStringLiteral("lastOpened"), info.lastOpened);
     }
@@ -98,17 +98,6 @@ void AppSettings::unregisterNotebook(const QString &rootPath)
         m_settings.remove(QStringLiteral("lastNotebook"));
         m_settings.sync();
     }
-}
-
-void AppSettings::renameNotebook(const QString &rootPath, const QString &name)
-{
-    QList<NotebookInfo> registered = readNotebooks(m_settings);
-    const QString path = comparablePath(rootPath);
-    for (NotebookInfo &info : registered) {
-        if (comparablePath(info.rootPath) == path)
-            info.name = name;
-    }
-    writeNotebooks(m_settings, registered);
 }
 
 void AppSettings::touchNotebook(const QString &rootPath)
@@ -254,7 +243,7 @@ SyncSettings AppSettings::syncSettings(const QString &notebookId) const
     result.remotePath = m_settings.value(QStringLiteral("remotePath"), QStringLiteral("Qoplin")).toString();
     result.userName = m_settings.value(QStringLiteral("userName")).toString();
     result.serverPassword = m_settings.value(QStringLiteral("serverPassword")).toString();
-    result.masterPassword = m_settings.value(QStringLiteral("masterPassword")).toString();
+
     m_settings.endGroup();
     m_settings.endGroup();
     return result;
@@ -271,7 +260,7 @@ void AppSettings::setSyncSettings(const QString &notebookId, const SyncSettings 
     m_settings.setValue(QStringLiteral("remotePath"), settings.remotePath);
     m_settings.setValue(QStringLiteral("userName"), settings.userName);
     m_settings.setValue(QStringLiteral("serverPassword"), settings.serverPassword);
-    m_settings.setValue(QStringLiteral("masterPassword"), settings.masterPassword);
+
     m_settings.endGroup();
     m_settings.endGroup();
     m_settings.sync();

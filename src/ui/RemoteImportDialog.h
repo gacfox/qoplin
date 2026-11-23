@@ -14,6 +14,7 @@ public:
     explicit RemoteImportDialog(AppSettings *settings, QWidget *parent = nullptr);
     ~RemoteImportDialog() override;
     QString importedPath() const { return m_importedPath; }
+    QString masterPassword() const;
     void reject() override;
 
 protected:

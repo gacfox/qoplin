@@ -24,8 +24,7 @@
    <item>
     <widget class="QGroupBox" name="encryptionGroup"><property name="title"><string>端到端加密</string></property>
      <layout class="QVBoxLayout" name="encryptionLayout">
-      <item><layout class="QFormLayout" name="masterForm"><item row="0" column="0"><widget class="QLabel" name="masterLabel"><property name="text"><string>主密码：</string></property></widget></item><item row="0" column="1"><widget class="QLineEdit" name="masterPasswordEdit"><property name="echoMode"><enum>QLineEdit::Password</enum></property><property name="placeholderText"><string>忘记主密码将无法恢复远端数据</string></property></widget></item></layout></item>
-      <item><widget class="QLabel" name="securityLabel"><property name="text"><string>标题、目录和正文会在本机加密后上传。冲突按对象采用最后写入版本。两个密码均以明文保存在本机配置中，请仅在可信设备上使用。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      <item><widget class="QLabel" name="securityLabel"><property name="text"><string>标题、目录和正文会在本机加密后上传。冲突按对象采用最后写入版本。同步使用当前笔记本主密码，主密码不会保存；服务器密码仍以明文保存在本机配置中。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
      </layout>
     </widget>
    </item>
