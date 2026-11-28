@@ -2,18 +2,96 @@
 <ui version="4.0">
  <class>UnlockNotebookDialog</class>
  <widget class="QDialog" name="UnlockNotebookDialog">
-  <property name="windowTitle"><string>解锁笔记本</string></property>
-  <property name="minimumSize"><size><width>460</width><height>160</height></size></property>
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>260</width>
+    <height>100</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>260</width>
+    <height>100</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>解锁笔记本</string>
+  </property>
   <layout class="QVBoxLayout" name="verticalLayout">
-   <item><widget class="QLabel" name="promptLabel"><property name="text"><string>请输入笔记本主密码。</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
-   <item><widget class="QLineEdit" name="passwordEdit"><property name="echoMode"><enum>QLineEdit::Password</enum></property><property name="placeholderText"><string>主密码</string></property></widget></item>
-   <item><widget class="QLabel" name="messageLabel"><property name="visible"><bool>false</bool></property><property name="wordWrap"><bool>true</bool></property></widget></item>
-   <item><widget class="QDialogButtonBox" name="buttonBox"><property name="standardButtons"><set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set></property></widget></item>
+   <item>
+    <widget class="QLabel" name="promptLabel">
+     <property name="text">
+      <string>请输入笔记本主密码</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLineEdit" name="passwordEdit">
+     <property name="echoMode">
+      <enum>QLineEdit::EchoMode::Password</enum>
+     </property>
+     <property name="placeholderText">
+      <string>主密码</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="messageLabel">
+     <property name="visible">
+      <bool>false</bool>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons">
+      <set>QDialogButtonBox::StandardButton::Cancel|QDialogButtonBox::StandardButton::Ok</set>
+     </property>
+    </widget>
+   </item>
   </layout>
  </widget>
  <resources/>
  <connections>
-  <connection><sender>buttonBox</sender><signal>accepted()</signal><receiver>UnlockNotebookDialog</receiver><slot>accept()</slot><hints/></connection>
-  <connection><sender>buttonBox</sender><signal>rejected()</signal><receiver>UnlockNotebookDialog</receiver><slot>reject()</slot><hints/></connection>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>accepted()</signal>
+   <receiver>UnlockNotebookDialog</receiver>
+   <slot>accept()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>20</x>
+     <y>20</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>20</x>
+     <y>20</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>rejected()</signal>
+   <receiver>UnlockNotebookDialog</receiver>
+   <slot>reject()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>20</x>
+     <y>20</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>20</x>
+     <y>20</y>
+    </hint>
+   </hints>
+  </connection>
  </connections>
 </ui>
