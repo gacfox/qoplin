@@ -3,6 +3,7 @@
 #include "storage/NotebookStore.h"
 #include "sync/CryptoService.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -197,6 +198,108 @@ void StorageTest::remoteNodePreservesRevision()
     QVERIFY(!error.isEmpty());
     QVERIFY(!reopened.contains(legacy.id));
     QVERIFY(!QFileInfo::exists(temp.path() + QStringLiteral("/.qoplin/notes/") + legacy.id + QStringLiteral(".md")));
+}
+
+void StorageTest::assetStorage()
+{
+    QTemporaryDir temp;
+    NotebookStore store;
+    QString error;
+    QVERIFY2(store.create(temp.path(), QStringLiteral("Assets"), kWriter, kPassword, &error),
+             qPrintable(error));
+    const QByteArray png = QByteArray::fromBase64(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZrXcAAAAASUVORK5CYII=");
+
+    AssetRecord input;
+    input.id = QStringLiteral("01234567-89ab-4def-8123-456789abcdef");
+    input.mimeType = QStringLiteral("image/png");
+    input.extension = QStringLiteral("png");
+    input.originalName = QStringLiteral("Secret pixel 名称.png");
+    QVERIFY2(store.writeAsset(input, png, &error), qPrintable(error));
+
+    const AssetRecord saved = store.asset(input.id);
+    QCOMPARE(saved.id, input.id);
+    QCOMPARE(saved.mimeType, input.mimeType);
+    QCOMPARE(saved.extension, input.extension);
+    QCOMPARE(saved.originalName, input.originalName);
+    QCOMPARE(saved.size, static_cast<qint64>(png.size()));
+    QCOMPARE(saved.sha256, QString::fromLatin1(QCryptographicHash::hash(png, QCryptographicHash::Sha256).toHex()));
+    QVERIFY(saved.createdAt > 0);
+    QVERIFY(saved.updatedAt >= saved.createdAt);
+    QCOMPARE(saved.writerId, kWriter);
+    QVERIFY(!saved.deleted);
+    QCOMPARE(store.assets().size(), 1);
+    QCOMPARE(store.assetPath(input.id), temp.path() + QStringLiteral("/.qoplin/assets/") + input.id
+                                           + QStringLiteral(".bin"));
+    QCOMPARE(store.readAsset(input.id, &error), png);
+    QVERIFY(error.isEmpty());
+
+    const QByteArray firstCipherText = readFileBytes(store.assetPath(input.id));
+    QVERIFY(!firstCipherText.isEmpty());
+    QVERIFY(!firstCipherText.contains(png));
+    QVERIFY(!containsSecret(firstCipherText, input.originalName));
+    QVERIFY(!containsSecret(readFileBytes(temp.path() + QStringLiteral("/") + kIndexName),
+                          input.originalName));
+
+    CryptoService crypto;
+    const QJsonObject header = readJsonObject(temp.path() + QStringLiteral("/") + kHeaderName);
+    QVERIFY2(crypto.initializeFromHeader(header, kPassword, &error, true), qPrintable(error));
+    QByteArray plainText;
+    const QByteArray associatedData = QByteArrayLiteral("qoplin/local/asset/v1:")
+        + store.id().toUtf8() + ':' + input.id.toUtf8();
+    QVERIFY2(crypto.decrypt(firstCipherText, associatedData, &plainText, &error), qPrintable(error));
+    QCOMPARE(plainText, png);
+    QByteArray wrongContext;
+    QVERIFY(!crypto.decrypt(firstCipherText, associatedData + 'x', &wrongContext, &error));
+
+    QVERIFY2(crypto.decrypt(readFileBytes(temp.path() + QStringLiteral("/") + kIndexName),
+                            QByteArrayLiteral("qoplin/local/index/v1:") + store.id().toUtf8(),
+                            &plainText, &error), qPrintable(error));
+    const QJsonArray assets = QJsonDocument::fromJson(plainText).object()
+        .value(QStringLiteral("assets")).toArray();
+    QCOMPARE(assets.size(), 1);
+    QCOMPARE(assets.first().toObject().value(QStringLiteral("originalName")).toString(),
+             input.originalName);
+
+    QTest::qWait(2);
+    QVERIFY(store.writeAsset(input, png, &error));
+    QVERIFY(readFileBytes(store.assetPath(input.id)) != firstCipherText);
+
+    NotebookStore reopened;
+    QVERIFY2(reopened.open(temp.path(), kPassword, QStringLiteral("device-b"), &error), qPrintable(error));
+    QCOMPARE(reopened.readAsset(input.id, &error), png);
+    QCOMPARE(reopened.asset(input.id).originalName, input.originalName);
+
+    AssetRecord remote = reopened.asset(input.id);
+    remote.createdAt = 42;
+    remote.updatedAt += 1000;
+    remote.writerId = QStringLiteral("remote-writer");
+    QVERIFY2(reopened.applyRemoteAsset(remote, png, &error), qPrintable(error));
+    QCOMPARE(reopened.asset(input.id).createdAt, qint64(42));
+    QCOMPARE(reopened.asset(input.id).updatedAt, remote.updatedAt);
+    QCOMPARE(reopened.asset(input.id).writerId, remote.writerId);
+
+    AssetRecord invalid = input;
+    invalid.id = QStringLiteral("../01234567-89ab-4def-8123-456789abcdef");
+    QVERIFY(!reopened.writeAsset(invalid, png, &error));
+    invalid = input;
+    invalid.extension = QStringLiteral("../png");
+    QVERIFY(!reopened.writeAsset(invalid, png, &error));
+    invalid.extension = QStringLiteral("exe");
+    QVERIFY(!reopened.writeAsset(invalid, png, &error));
+    invalid = input;
+    invalid.originalName = QStringLiteral("../secret.png");
+    QVERIFY(!reopened.writeAsset(invalid, png, &error));
+
+    remote.deleted = true;
+    remote.updatedAt += 1000;
+    QVERIFY(reopened.applyRemoteAsset(remote, QByteArray(), &error));
+    QVERIFY(reopened.asset(input.id).deleted);
+    QCOMPARE(reopened.asset(input.id).updatedAt, remote.updatedAt);
+    QCOMPARE(reopened.assets().size(), 0);
+    QCOMPARE(reopened.assets(true).size(), 1);
+    QVERIFY(reopened.readAsset(input.id, &error).isNull());
+    QVERIFY(!error.isEmpty());
 }
 
 void StorageTest::indexBackupRecovery()

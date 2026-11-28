@@ -4,6 +4,7 @@
 #include "sync/RemoteImportWorker.h"
 #include "sync/WebDavClient.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
 #include <QHostAddress>
@@ -125,6 +126,28 @@ QJsonObject nodeJson(const NoteNode &node)
     };
 }
 
+QJsonObject assetJson(const AssetRecord &asset)
+{
+    return {
+        {QStringLiteral("id"), asset.id},
+        {QStringLiteral("mimeType"), asset.mimeType},
+        {QStringLiteral("extension"), asset.extension},
+        {QStringLiteral("originalName"), asset.originalName},
+        {QStringLiteral("size"), QString::number(asset.size)},
+        {QStringLiteral("sha256"), asset.sha256},
+        {QStringLiteral("createdAt"), QString::number(asset.createdAt)},
+        {QStringLiteral("updatedAt"), QString::number(asset.updatedAt)},
+        {QStringLiteral("writerId"), asset.writerId},
+        {QStringLiteral("deleted"), asset.deleted}
+    };
+}
+
+QByteArray testPng()
+{
+    return QByteArray::fromBase64(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZrXcAAAAASUVORK5CYII=");
+}
+
 bool seedNotebook(MockWebDavServer *server, const QString &notebookId,
                   const QString &password, const QString &notebookName,
                   bool corruptObject, QString *error)
@@ -148,6 +171,18 @@ bool seedNotebook(MockWebDavServer *server, const QString &notebookId,
     note.updatedAt = 21;
     note.writerId = QStringLiteral("remote-writer");
 
+    const QByteArray png = testPng();
+    AssetRecord asset;
+    asset.id = QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    asset.mimeType = QStringLiteral("image/png");
+    asset.extension = QStringLiteral("png");
+    asset.originalName = QStringLiteral("remote-pixel.png");
+    asset.size = png.size();
+    asset.sha256 = QString::fromLatin1(QCryptographicHash::hash(png, QCryptographicHash::Sha256).toHex());
+    asset.createdAt = 12;
+    asset.updatedAt = 22;
+    asset.writerId = QStringLiteral("remote-writer");
+
     CryptoService crypto;
     QJsonObject header;
     if (!crypto.createHeader(password, &header, error))
@@ -157,9 +192,12 @@ bool seedNotebook(MockWebDavServer *server, const QString &notebookId,
                     {QStringLiteral("writerId"), note.writerId}},
         QJsonObject{{QStringLiteral("id"), folderId}, {QStringLiteral("updatedAt"), QString::number(20)},
                     {QStringLiteral("writerId"), folder.writerId}}};
+    const QJsonArray manifestAssets{
+        QJsonObject{{QStringLiteral("id"), asset.id}, {QStringLiteral("updatedAt"), QString::number(22)},
+                    {QStringLiteral("writerId"), asset.writerId}}};
     const QJsonObject manifest{
         {QStringLiteral("version"), 1}, {QStringLiteral("notebookName"), notebookName},
-        {QStringLiteral("nodes"), manifestNodes}};
+        {QStringLiteral("nodes"), manifestNodes}, {QStringLiteral("assets"), manifestAssets}};
     QByteArray encryptedManifest;
     if (!crypto.encrypt(QJsonDocument(manifest).toJson(QJsonDocument::Compact),
                         QByteArrayLiteral("qoplin/manifest/v1"), &encryptedManifest, error)) {
@@ -182,6 +220,20 @@ bool seedNotebook(MockWebDavServer *server, const QString &notebookId,
             encrypted[encrypted.size() - 1] = static_cast<char>(encrypted.at(encrypted.size() - 1) ^ 1);
         server->files.insert(prefix + "/objects/" + node.id.toUtf8() + ".bin", encrypted);
     }
+
+    const QByteArray metadata = QJsonDocument(assetJson(asset)).toJson(QJsonDocument::Compact);
+    const quint32 metadataLength = static_cast<quint32>(metadata.size());
+    QByteArray envelope;
+    envelope.append(static_cast<char>((metadataLength >> 24) & 0xff));
+    envelope.append(static_cast<char>((metadataLength >> 16) & 0xff));
+    envelope.append(static_cast<char>((metadataLength >> 8) & 0xff));
+    envelope.append(static_cast<char>(metadataLength & 0xff));
+    envelope.append(metadata);
+    envelope.append(png);
+    QByteArray encryptedAsset;
+    if (!crypto.encrypt(envelope, "qoplin/asset/v1:" + asset.id.toUtf8(), &encryptedAsset, error))
+        return false;
+    server->files.insert(prefix + "/assets/" + asset.id.toUtf8() + ".bin", encryptedAsset);
     return true;
 }
 
@@ -283,7 +335,7 @@ void RemoteImportTest::importsEncryptedNotebook()
     const ImportResult result = import(worker);
     QVERIFY2(result.success, qPrintable(result.message));
     QCOMPARE(result.rootPath, target);
-    QCOMPARE(result.importedObjects, 2);
+    QCOMPARE(result.importedObjects, 3);
 
     NotebookStore store;
     QVERIFY2(store.open(target, QStringLiteral("master password"), QStringLiteral("local-writer"), &error), qPrintable(error));
@@ -293,6 +345,12 @@ void RemoteImportTest::importsEncryptedNotebook()
              QStringLiteral("Remote folder"));
     QCOMPARE(store.readNote(QStringLiteral("00000000-0000-4000-8000-000000000001"), &error),
              QStringLiteral("Encrypted markdown"));
+    const QString assetId = QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    QCOMPARE(store.readAsset(assetId, &error), testPng());
+    QCOMPARE(store.asset(assetId).mimeType, QStringLiteral("image/png"));
+    QCOMPARE(store.asset(assetId).originalName, QStringLiteral("remote-pixel.png"));
+    QCOMPARE(store.asset(assetId).updatedAt, qint64(22));
+    QCOMPARE(store.asset(assetId).writerId, QStringLiteral("remote-writer"));
 
     const ImportResult second = import(worker);
     QVERIFY(!second.success);
@@ -300,6 +358,19 @@ void RemoteImportTest::importsEncryptedNotebook()
     NotebookStore original;
     QVERIFY(original.open(target, QStringLiteral("master password"), QStringLiteral("local-writer"), &error));
     QCOMPARE(original.name(), QStringLiteral("Manifest name"));
+
+    // A manifest entry whose asset object is absent is skipped for compatibility.
+    server.files.remove("/dav/Qoplin/" + id.toUtf8() + "/assets/" + assetId.toUtf8() + ".bin");
+    const QString compatibleTarget = temp.path() + QStringLiteral("/imported-without-asset");
+    worker.configure(settings, QString(), QStringLiteral("master password"), id, compatibleTarget,
+                     QString(), QStringLiteral("local-writer"));
+    const ImportResult compatible = import(worker);
+    QVERIFY2(compatible.success, qPrintable(compatible.message));
+    QCOMPARE(compatible.importedObjects, 2);
+    NotebookStore withoutAsset;
+    QVERIFY(withoutAsset.open(compatibleTarget, QStringLiteral("master password"),
+                              QStringLiteral("local-writer"), &error));
+    QVERIFY(withoutAsset.assets(true).isEmpty());
 }
 
 void RemoteImportTest::failedImportCleansStaging()

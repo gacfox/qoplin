@@ -128,6 +128,16 @@ QString objectPath(const QString &id)
     return QStringLiteral("objects/%1.bin").arg(id);
 }
 
+QByteArray assetContext(const QString &id)
+{
+    return QByteArrayLiteral("qoplin/asset/v1:") + id.toUtf8();
+}
+
+QString remoteAssetPath(const QString &id)
+{
+    return QStringLiteral("assets/%1.bin").arg(id);
+}
+
 QJsonObject nodeToJson(const NoteNode &node)
 {
     QJsonObject object;
@@ -143,6 +153,92 @@ QJsonObject nodeToJson(const NoteNode &node)
     object.insert(QStringLiteral("sortOrder"), node.sortOrder);
     object.insert(QStringLiteral("deleted"), node.deleted);
     return object;
+}
+
+QJsonObject assetToJson(const AssetRecord &asset)
+{
+    return {
+        {QStringLiteral("id"), asset.id},
+        {QStringLiteral("mimeType"), asset.mimeType},
+        {QStringLiteral("extension"), asset.extension},
+        {QStringLiteral("originalName"), asset.originalName},
+        {QStringLiteral("size"), QString::number(asset.size)},
+        {QStringLiteral("sha256"), asset.sha256},
+        {QStringLiteral("createdAt"), QString::number(asset.createdAt)},
+        {QStringLiteral("updatedAt"), QString::number(asset.updatedAt)},
+        {QStringLiteral("writerId"), asset.writerId},
+        {QStringLiteral("deleted"), asset.deleted}
+    };
+}
+
+bool assetFromJson(const QJsonObject &object, const QString &expectedId,
+                   AssetRecord *asset, QString *error)
+{
+    if (!object.value(QStringLiteral("id")).isString()
+        || !object.value(QStringLiteral("mimeType")).isString()
+        || !object.value(QStringLiteral("extension")).isString()
+        || !object.value(QStringLiteral("originalName")).isString()
+        || !object.value(QStringLiteral("sha256")).isString()
+        || !object.value(QStringLiteral("writerId")).isString()
+        || !object.value(QStringLiteral("deleted")).isBool()) {
+        return fail(error, QStringLiteral("A remote asset has invalid metadata."));
+    }
+
+    AssetRecord result;
+    result.id = object.value(QStringLiteral("id")).toString();
+    result.mimeType = object.value(QStringLiteral("mimeType")).toString();
+    result.extension = object.value(QStringLiteral("extension")).toString();
+    result.originalName = object.value(QStringLiteral("originalName")).toString();
+    result.sha256 = object.value(QStringLiteral("sha256")).toString();
+    result.writerId = object.value(QStringLiteral("writerId")).toString();
+    result.deleted = object.value(QStringLiteral("deleted")).toBool();
+    if (!readInt64(object, QStringLiteral("size"), &result.size)
+        || !readInt64(object, QStringLiteral("createdAt"), &result.createdAt)
+        || !readInt64(object, QStringLiteral("updatedAt"), &result.updatedAt)
+        || result.size < 0 || result.createdAt < 0 || result.updatedAt < 0) {
+        return fail(error, QStringLiteral("A remote asset has invalid sizes or timestamps."));
+    }
+    if (!validUuid(result.id) || result.id != expectedId)
+        return fail(error, QStringLiteral("A remote asset has an unsafe or inconsistent identifier."));
+
+    *asset = result;
+    return true;
+}
+
+bool decodeAssetEnvelope(const QByteArray &plainText, const QString &expectedId,
+                         AssetRecord *asset, QByteArray *data, QString *error)
+{
+    if (plainText.size() < 4)
+        return fail(error, QStringLiteral("A remote asset has a truncated binary envelope."));
+    const auto byte = [&plainText](int offset) {
+        return static_cast<quint32>(static_cast<unsigned char>(plainText.at(offset)));
+    };
+    const quint32 metadataLength = (byte(0) << 24) | (byte(1) << 16) | (byte(2) << 8) | byte(3);
+    if (metadataLength > static_cast<quint32>(plainText.size() - 4))
+        return fail(error, QStringLiteral("A remote asset has an invalid metadata length."));
+    QJsonObject metadata;
+    if (!parseObject(plainText.mid(4, static_cast<int>(metadataLength)), &metadata,
+                     QStringLiteral("Remote asset metadata"), error)
+        || !assetFromJson(metadata, expectedId, asset, error)) {
+        return false;
+    }
+    *data = plainText.mid(4 + static_cast<int>(metadataLength));
+    return true;
+}
+
+QByteArray encodeAssetEnvelope(const AssetRecord &asset, const QByteArray &data)
+{
+    const QByteArray metadata = QJsonDocument(assetToJson(asset)).toJson(QJsonDocument::Compact);
+    const quint32 length = static_cast<quint32>(metadata.size());
+    QByteArray envelope;
+    envelope.reserve(4 + metadata.size() + data.size());
+    envelope.append(static_cast<char>((length >> 24) & 0xff));
+    envelope.append(static_cast<char>((length >> 16) & 0xff));
+    envelope.append(static_cast<char>((length >> 8) & 0xff));
+    envelope.append(static_cast<char>(length & 0xff));
+    envelope.append(metadata);
+    envelope.append(data);
+    return envelope;
 }
 
 bool nodeFromJson(const QJsonObject &object, const QString &expectedId,
@@ -197,17 +293,11 @@ bool nodeFromJson(const QJsonObject &object, const QString &expectedId,
     return true;
 }
 
-bool parseManifest(const QJsonObject &object, QHash<QString, RemoteEntry> *entries,
-                   QString *error)
+bool parseManifestEntries(const QJsonArray &array, QHash<QString, RemoteEntry> *entries,
+                          QString *error)
 {
-    if (object.value(QStringLiteral("version")).toInt(-1) != kManifestVersion
-        || !object.value(QStringLiteral("nodes")).isArray()) {
-        return fail(error, QStringLiteral("The remote manifest has an unsupported format."));
-    }
-
     entries->clear();
-    const QJsonArray nodes = object.value(QStringLiteral("nodes")).toArray();
-    for (const QJsonValue &value : nodes) {
+    for (const QJsonValue &value : array) {
         if (!value.isObject())
             return fail(error, QStringLiteral("The remote manifest contains an invalid entry."));
         const QJsonObject jsonEntry = value.toObject();
@@ -228,40 +318,73 @@ bool parseManifest(const QJsonObject &object, QHash<QString, RemoteEntry> *entri
     return true;
 }
 
-QByteArray manifestToJson(const QHash<QString, RemoteEntry> &entries, const QString &notebookName)
+bool parseManifest(const QJsonObject &object, QHash<QString, RemoteEntry> *entries,
+                   QHash<QString, RemoteEntry> *assetEntries, QString *error)
+{
+    if (object.value(QStringLiteral("version")).toInt(-1) != kManifestVersion
+        || !object.value(QStringLiteral("nodes")).isArray()) {
+        return fail(error, QStringLiteral("The remote manifest has an unsupported format."));
+    }
+    const QJsonValue assets = object.value(QStringLiteral("assets"));
+    if (!assets.isUndefined() && !assets.isArray())
+        return fail(error, QStringLiteral("The remote manifest has an invalid asset list."));
+    return parseManifestEntries(object.value(QStringLiteral("nodes")).toArray(), entries, error)
+        && parseManifestEntries(assets.toArray(), assetEntries, error);
+}
+
+QJsonArray manifestEntriesToJson(const QHash<QString, RemoteEntry> &entries)
 {
     QStringList ids = entries.keys();
     std::sort(ids.begin(), ids.end());
-    QJsonArray nodes;
+    QJsonArray result;
     for (const QString &id : ids) {
         const RemoteEntry &entry = entries[id];
         QJsonObject object;
         object.insert(QStringLiteral("id"), entry.id);
         object.insert(QStringLiteral("updatedAt"), QString::number(entry.updatedAt));
         object.insert(QStringLiteral("writerId"), entry.writerId);
-        nodes.append(object);
+        result.append(object);
     }
+    return result;
+}
+
+QByteArray manifestToJson(const QHash<QString, RemoteEntry> &entries,
+                          const QHash<QString, RemoteEntry> &assetEntries,
+                          const QString &notebookName)
+{
     QJsonObject manifest;
     manifest.insert(QStringLiteral("version"), kManifestVersion);
     if (!notebookName.isEmpty()) manifest.insert(QStringLiteral("notebookName"), notebookName);
-    manifest.insert(QStringLiteral("nodes"), nodes);
+    manifest.insert(QStringLiteral("nodes"), manifestEntriesToJson(entries));
+    manifest.insert(QStringLiteral("assets"), manifestEntriesToJson(assetEntries));
     return QJsonDocument(manifest).toJson(QJsonDocument::Compact);
 }
 
 enum class Comparison { LocalNewer, RemoteNewer, Equal };
 
-Comparison compareNodes(const NoteNode &local, const RemoteEntry &remote)
+Comparison compareRevision(qint64 localUpdatedAt, const QString &localWriterId,
+                           const RemoteEntry &remote)
 {
-    if (local.updatedAt > remote.updatedAt)
+    if (localUpdatedAt > remote.updatedAt)
         return Comparison::LocalNewer;
-    if (local.updatedAt < remote.updatedAt)
+    if (localUpdatedAt < remote.updatedAt)
         return Comparison::RemoteNewer;
-    const int writerComparison = QString::compare(local.writerId, remote.writerId, Qt::CaseSensitive);
+    const int writerComparison = QString::compare(localWriterId, remote.writerId, Qt::CaseSensitive);
     if (writerComparison > 0)
         return Comparison::LocalNewer;
     if (writerComparison < 0)
         return Comparison::RemoteNewer;
     return Comparison::Equal;
+}
+
+Comparison compareNodes(const NoteNode &local, const RemoteEntry &remote)
+{
+    return compareRevision(local.updatedAt, local.writerId, remote);
+}
+
+Comparison compareAssets(const AssetRecord &local, const RemoteEntry &remote)
+{
+    return compareRevision(local.updatedAt, local.writerId, remote);
 }
 
 } // namespace
@@ -346,7 +469,8 @@ void SyncWorker::start()
 
     emit progress(QStringLiteral("Preparing the remote collection."));
     if (!m_client->ensureCollection(QString(), &error)
-        || !m_client->ensureCollection(QStringLiteral("objects"), &error)) {
+        || !m_client->ensureCollection(QStringLiteral("objects"), &error)
+        || !m_client->ensureCollection(QStringLiteral("assets"), &error)) {
         complete(false, error, uploaded, downloaded);
         return;
     }
@@ -380,6 +504,7 @@ void SyncWorker::start()
     }
 
     QHash<QString, RemoteEntry> remoteEntries;
+    QHash<QString, RemoteEntry> remoteAssetEntries;
     bool manifestChanged = false;
     const WebDavResponse manifestResponse = m_client->get(QStringLiteral("manifest.bin"));
     if (manifestResponse.statusCode == 404) {
@@ -389,7 +514,7 @@ void SyncWorker::start()
         QJsonObject manifest;
         if (!crypto->decrypt(manifestResponse.body, kManifestContext, &plainText, &error)
             || !parseObject(plainText, &manifest, QStringLiteral("The remote manifest"), &error)
-            || !parseManifest(manifest, &remoteEntries, &error)) {
+            || !parseManifest(manifest, &remoteEntries, &remoteAssetEntries, &error)) {
             complete(false, error, uploaded, downloaded);
             return;
         }
@@ -538,6 +663,102 @@ void SyncWorker::start()
         }
     }
 
+    QHash<QString, AssetRecord> localAssets;
+    const QVector<AssetRecord> allLocalAssets = m_store->assets(true);
+    for (const AssetRecord &asset : allLocalAssets)
+        localAssets.insert(asset.id, asset);
+
+    QStringList assetIds = localAssets.keys();
+    assetIds.append(remoteAssetEntries.keys());
+    assetIds.removeDuplicates();
+    std::sort(assetIds.begin(), assetIds.end());
+
+    // Assets have no hierarchy, so each download can be applied and released before
+    // the next one is fetched. At most one asset payload is held by this loop.
+    for (const QString &id : assetIds) {
+        if (cancelled()) {
+            complete(false, QStringLiteral("Synchronization was cancelled."), uploaded, downloaded);
+            return;
+        }
+
+        const bool hasLocal = localAssets.contains(id);
+        const bool hasRemote = remoteAssetEntries.contains(id);
+        if (hasLocal && hasRemote
+            && compareAssets(localAssets.value(id), remoteAssetEntries.value(id)) == Comparison::Equal) {
+            continue;
+        }
+
+        if (hasRemote && (!hasLocal
+                          || compareAssets(localAssets.value(id), remoteAssetEntries.value(id))
+                              == Comparison::RemoteNewer)) {
+            const WebDavResponse assetResponse = m_client->get(remoteAssetPath(id));
+            if (!successful(assetResponse, QStringLiteral("Downloading a remote asset"), &error)) {
+                complete(false, error, uploaded, downloaded);
+                return;
+            }
+            QByteArray plainText;
+            AssetRecord remoteAsset;
+            QByteArray assetData;
+            if (!crypto->decrypt(assetResponse.body, assetContext(id), &plainText, &error)
+                || !decodeAssetEnvelope(plainText, id, &remoteAsset, &assetData, &error)) {
+                complete(false, error, uploaded, downloaded);
+                return;
+            }
+            const RemoteEntry entry = remoteAssetEntries.value(id);
+            if (remoteAsset.updatedAt != entry.updatedAt || remoteAsset.writerId != entry.writerId) {
+                complete(false, QStringLiteral("A remote asset does not match its manifest entry."),
+                         uploaded, downloaded);
+                return;
+            }
+            if (!m_store->applyRemoteAsset(remoteAsset, assetData, &error)) {
+                complete(false, error, uploaded, downloaded);
+                return;
+            }
+            ++downloaded;
+            emit progress(QStringLiteral("Downloaded %1 object(s).").arg(downloaded));
+            continue;
+        }
+
+        if (!hasLocal) {
+            complete(false, QStringLiteral("The local asset index is inconsistent."), uploaded, downloaded);
+            return;
+        }
+        const AssetRecord asset = localAssets.value(id);
+        if (!validUuid(asset.id)) {
+            complete(false, QStringLiteral("A local asset has an invalid UUID."), uploaded, downloaded);
+            return;
+        }
+        QByteArray assetData;
+        if (!asset.deleted) {
+            error.clear();
+            assetData = m_store->readAsset(asset.id, &error);
+            if (!error.isEmpty()) {
+                complete(false, error, uploaded, downloaded);
+                return;
+            }
+        }
+
+        QByteArray encrypted;
+        if (!crypto->encrypt(encodeAssetEnvelope(asset, assetData), assetContext(id),
+                             &encrypted, &error)) {
+            complete(false, error, uploaded, downloaded);
+            return;
+        }
+        const WebDavResponse putResponse = m_client->put(remoteAssetPath(id), encrypted);
+        if (!successful(putResponse, QStringLiteral("Uploading a local asset"), &error)) {
+            complete(false, error, uploaded, downloaded);
+            return;
+        }
+        RemoteEntry entry;
+        entry.id = asset.id;
+        entry.updatedAt = asset.updatedAt;
+        entry.writerId = asset.writerId;
+        remoteAssetEntries.insert(id, entry);
+        manifestChanged = true;
+        ++uploaded;
+        emit progress(QStringLiteral("Uploaded %1 object(s).").arg(uploaded));
+    }
+
     if (manifestChanged) {
         if (cancelled()) {
             complete(false, QStringLiteral("Synchronization was cancelled."), uploaded, downloaded);
@@ -545,8 +766,8 @@ void SyncWorker::start()
         }
         emit progress(QStringLiteral("Updating the remote manifest."));
         QByteArray encryptedManifest;
-        if (!crypto->encrypt(manifestToJson(remoteEntries, m_store->name()), kManifestContext,
-                             &encryptedManifest, &error)) {
+        if (!crypto->encrypt(manifestToJson(remoteEntries, remoteAssetEntries, m_store->name()),
+                             kManifestContext, &encryptedManifest, &error)) {
             complete(false, error, uploaded, downloaded);
             return;
         }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "models/AssetRecord.h"
 #include "models/NoteNode.h"
 
 #include <QHash>
@@ -15,8 +16,9 @@ class CryptoService;
 // qoplin.json is a non-secret crypto header (format 'qoplin-encrypted-local', version 1,
 // notebook id, KDF salt/ops/mem, key check). It never contains the notebook name, any
 // node data, the writer ID, or key material. Everything else on disk is AEAD ciphertext:
-// .qoplin/index.bin holds {version, notebookName, nodes} and .qoplin/notes/<uuid>.bin
-// holds the UTF-8 markdown of a note. Old plaintext notebooks are not supported.
+// .qoplin/index.bin holds {version, notebookName, nodes, assets}, .qoplin/notes/<uuid>.bin
+// holds the UTF-8 markdown of a note, and .qoplin/assets/<uuid>.bin holds image bytes.
+// Old plaintext notebooks are not supported.
 class NotebookStore
 {
 public:
@@ -61,6 +63,13 @@ public:
     QString readNote(const QString &id, QString *error = nullptr) const;
     bool writeNote(const QString &id, const QString &content, QString *error = nullptr);
 
+    QVector<AssetRecord> assets(bool includeDeleted = false) const;
+    AssetRecord asset(const QString &id) const;
+    QByteArray readAsset(const QString &id, QString *error = nullptr) const;
+    bool writeAsset(const AssetRecord &asset, const QByteArray &data, QString *error = nullptr);
+    bool applyRemoteAsset(const AssetRecord &asset, const QByteArray &data, QString *error = nullptr);
+    QString assetPath(const QString &id) const;
+
     // Used by synchronization. These methods preserve remote timestamps and writer IDs.
     bool applyRemoteNode(const NoteNode &node, const QString &content, QString *error = nullptr);
     QString notePath(const NoteNode &node) const;
@@ -71,6 +80,7 @@ private:
     QString internalPath(const QString &name) const;
     QString noteFilePath(const QString &noteId) const;
     bool writeNoteFile(const QString &noteId, const QByteArray &plainText, QString *error) const;
+    bool writeAssetFile(const QString &assetId, const QByteArray &plainText, QString *error) const;
     // Reads, authenticates, and parses an encrypted JSON object. The verified raw
     // ciphertext is returned as well, so a recovery can rewrite it without re-encrypting.
     bool readEncryptedJson(const QString &path, const QByteArray &associatedData,
@@ -85,6 +95,7 @@ private:
     QString m_writerId;
     QString m_masterPassword;
     QHash<QString, NoteNode> m_nodes;
+    QHash<QString, AssetRecord> m_assets;
     // Holds the derived key; destroyed by close() and the destructor.
     std::unique_ptr<CryptoService> m_crypto;
 };

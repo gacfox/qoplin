@@ -2,6 +2,7 @@
 
 #include "sync/CryptoService.h"
 
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -26,6 +27,7 @@ constexpr int kSchemaVersion = 1;
 const QString kHeaderName = QStringLiteral("qoplin.json");
 const QString kIndexName = QStringLiteral(".qoplin/index.bin");
 const QString kNotesDirectory = QStringLiteral(".qoplin/notes");
+const QString kAssetsDirectory = QStringLiteral(".qoplin/assets");
 const QString kInternalDirectory = QStringLiteral(".qoplin");
 const QString kBackupSuffix = QStringLiteral(".bak");
 const QString kNoteSuffix = QStringLiteral(".bin");
@@ -41,6 +43,11 @@ QByteArray indexAssociatedData(const QString &notebookId)
 QByteArray noteAssociatedData(const QString &notebookId, const QString &noteId)
 {
     return QByteArrayLiteral("qoplin/local/note/v1:") + notebookId.toUtf8() + ':' + noteId.toUtf8();
+}
+
+QByteArray assetAssociatedData(const QString &notebookId, const QString &assetId)
+{
+    return QByteArrayLiteral("qoplin/local/asset/v1:") + notebookId.toUtf8() + ':' + assetId.toUtf8();
 }
 
 QString legacyNotebookMessage()
@@ -199,6 +206,72 @@ QJsonObject nodeToJson(const NoteNode &node)
     };
 }
 
+QJsonObject assetToJson(const AssetRecord &asset)
+{
+    return {
+        {QStringLiteral("id"), asset.id},
+        {QStringLiteral("mimeType"), asset.mimeType},
+        {QStringLiteral("extension"), asset.extension},
+        {QStringLiteral("originalName"), asset.originalName},
+        {QStringLiteral("size"), static_cast<double>(asset.size)},
+        {QStringLiteral("sha256"), asset.sha256},
+        {QStringLiteral("createdAt"), static_cast<double>(asset.createdAt)},
+        {QStringLiteral("updatedAt"), static_cast<double>(asset.updatedAt)},
+        {QStringLiteral("writerId"), asset.writerId},
+        {QStringLiteral("deleted"), asset.deleted}
+    };
+}
+
+bool normalizeAsset(const AssetRecord &input, AssetRecord *output, QString *error)
+{
+    auto fail = [error](const QString &message) {
+        if (error)
+            *error = message;
+        return false;
+    };
+
+    AssetRecord result = input;
+    result.id = normalizedUuid(input.id);
+    if (result.id.isEmpty())
+        return fail(QStringLiteral("Every asset must have a valid UUID."));
+    if (result.createdAt < 0 || result.updatedAt < 0 || result.size < 0)
+        return fail(QStringLiteral("Asset %1 has a negative timestamp or size.").arg(result.id));
+
+    QString extension = result.extension;
+    if (extension.startsWith(QLatin1Char('.')))
+        extension.remove(0, 1);
+    extension = extension.toLower();
+    static const QSet<QString> supportedExtensions = {
+        QStringLiteral("apng"), QStringLiteral("avif"), QStringLiteral("bmp"),
+        QStringLiteral("gif"), QStringLiteral("heic"), QStringLiteral("heif"),
+        QStringLiteral("ico"), QStringLiteral("jfif"), QStringLiteral("jpeg"),
+        QStringLiteral("jpg"), QStringLiteral("png"), QStringLiteral("svg"),
+        QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("webp")
+    };
+    if (!supportedExtensions.contains(extension))
+        return fail(QStringLiteral("Asset %1 has an invalid image extension.").arg(result.id));
+    if (result.originalName == QStringLiteral(".") || result.originalName == QStringLiteral("..")
+        || result.originalName.contains(QLatin1Char('/'))
+        || result.originalName.contains(QLatin1Char('\\'))
+        || result.originalName.contains(QChar::Null)) {
+        return fail(QStringLiteral("Asset %1 has an unsafe original file name.").arg(result.id));
+    }
+    if (!result.sha256.isEmpty()) {
+        if (result.sha256.size() != 64)
+            return fail(QStringLiteral("Asset %1 has an invalid SHA-256 digest.").arg(result.id));
+        for (const QChar ch : result.sha256) {
+            const ushort value = ch.unicode();
+            const bool hexadecimal = (value >= '0' && value <= '9')
+                || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F');
+            if (!hexadecimal)
+                return fail(QStringLiteral("Asset %1 has an invalid SHA-256 digest.").arg(result.id));
+        }
+    }
+
+    *output = result;
+    return true;
+}
+
 bool normalizeNode(const NoteNode &input, NoteNode *output, QString *error)
 {
     auto fail = [error](const QString &message) {
@@ -305,6 +378,7 @@ void NotebookStore::close()
     m_masterPassword.fill(QChar::Null);
     m_masterPassword.clear();
     m_nodes.clear();
+    m_assets.clear();
     m_id.clear();
     m_name.clear();
     m_rootPath.clear();
@@ -336,6 +410,14 @@ QString NotebookStore::notePath(const NoteNode &node) const
     return noteFilePath(node.id);
 }
 
+QString NotebookStore::assetPath(const QString &id) const
+{
+    const QString normalizedId = normalizedUuid(id);
+    if (normalizedId.isEmpty())
+        return QString();
+    return internalPath(kAssetsDirectory + QLatin1Char('/') + normalizedId + kNoteSuffix);
+}
+
 bool NotebookStore::writeNoteFile(const QString &noteId, const QByteArray &plainText, QString *error) const
 {
     const QString id = normalizedUuid(noteId);
@@ -346,6 +428,17 @@ bool NotebookStore::writeNoteFile(const QString &noteId, const QByteArray &plain
     if (!m_crypto->encrypt(plainText, noteAssociatedData(m_id, id), &cipherText, error))
         return false;
     return writeAtomically(noteFilePath(id), cipherText, error);
+}
+
+bool NotebookStore::writeAssetFile(const QString &assetId, const QByteArray &plainText, QString *error) const
+{
+    const QString id = normalizedUuid(assetId);
+    if (id.isEmpty())
+        return setError(error, QStringLiteral("The asset has an invalid UUID."));
+    QByteArray cipherText;
+    if (!m_crypto->encrypt(plainText, assetAssociatedData(m_id, id), &cipherText, error))
+        return false;
+    return writeAtomically(assetPath(id), cipherText, error);
 }
 
 bool NotebookStore::readEncryptedJson(const QString &path, const QByteArray &associatedData,
@@ -399,8 +492,10 @@ bool NotebookStore::createWithId(const QString &rootPath, const QString &name, c
         return setError(error, QStringLiteral("A notebook already exists at this path."));
     }
 
-    if (!QDir().mkpath(cleanRoot) || !QDir().mkpath(root.filePath(kNotesDirectory)))
+    if (!QDir().mkpath(cleanRoot) || !QDir().mkpath(root.filePath(kNotesDirectory))
+        || !QDir().mkpath(root.filePath(kAssetsDirectory))) {
         return setError(error, QStringLiteral("Cannot create the notebook directories."));
+    }
 
     m_rootPath = cleanRoot;
     m_id = id;
@@ -418,6 +513,7 @@ bool NotebookStore::createWithId(const QString &rootPath, const QString &name, c
         QFile::remove(internalPath(kIndexName));
         QFile::remove(internalPath(kIndexName) + kBackupSuffix);
         QDir(cleanRoot).rmdir(kNotesDirectory);
+        QDir(cleanRoot).rmdir(kAssetsDirectory);
         QDir(cleanRoot).rmdir(kInternalDirectory);
         close();
     };
@@ -583,10 +679,53 @@ bool NotebookStore::load(QString *error)
     if (!validateNodeGraph(loaded, error))
         return false;
 
+    QHash<QString, AssetRecord> loadedAssets;
+    const QJsonValue assetsValue = index.value(QStringLiteral("assets"));
+    if (!assetsValue.isUndefined() && !assetsValue.isArray())
+        return setError(error, QStringLiteral("The asset index is invalid."));
+    const QJsonArray assetArray = assetsValue.toArray();
+    for (const QJsonValue &value : assetArray) {
+        if (!value.isObject())
+            return setError(error, QStringLiteral("The asset index contains a non-object entry."));
+        const QJsonObject object = value.toObject();
+        if (!object.value(QStringLiteral("id")).isString()
+            || !object.value(QStringLiteral("mimeType")).isString()
+            || !object.value(QStringLiteral("extension")).isString()
+            || !object.value(QStringLiteral("originalName")).isString()
+            || !object.value(QStringLiteral("sha256")).isString()
+            || !object.value(QStringLiteral("writerId")).isString()) {
+            return setError(error, QStringLiteral("The asset index contains invalid metadata."));
+        }
+        AssetRecord candidate;
+        candidate.id = object.value(QStringLiteral("id")).toString();
+        candidate.mimeType = object.value(QStringLiteral("mimeType")).toString();
+        candidate.extension = object.value(QStringLiteral("extension")).toString();
+        candidate.originalName = object.value(QStringLiteral("originalName")).toString();
+        candidate.sha256 = object.value(QStringLiteral("sha256")).toString();
+        candidate.writerId = object.value(QStringLiteral("writerId")).toString();
+        if (!jsonInt64(object, QStringLiteral("size"), 0, &candidate.size, error)
+            || !jsonInt64(object, QStringLiteral("createdAt"), 0, &candidate.createdAt, error)
+            || !jsonInt64(object, QStringLiteral("updatedAt"), 0, &candidate.updatedAt, error)) {
+            return false;
+        }
+        const QJsonValue deleted = object.value(QStringLiteral("deleted"));
+        if (!deleted.isUndefined() && !deleted.isBool())
+            return setError(error, QStringLiteral("An asset has an invalid tombstone flag."));
+        candidate.deleted = deleted.toBool(false);
+
+        AssetRecord normalized;
+        if (!normalizeAsset(candidate, &normalized, error))
+            return false;
+        if (loadedAssets.contains(normalized.id))
+            return setError(error, QStringLiteral("The asset index contains duplicate IDs."));
+        loadedAssets.insert(normalized.id, normalized);
+    }
+
     // Everything is verified: publish the state.
     m_id = headerId;
     m_name = index.value(QStringLiteral("notebookName")).toString();
     m_nodes = loaded;
+    m_assets = loadedAssets;
 
     // Restore a recovered primary copy from the verified backup, byte for byte.
     // This is a repair of an already consistent state, so a failure is not fatal.
@@ -606,11 +745,16 @@ bool NotebookStore::saveIndex(QString *error) const
     const QVector<NoteNode> ordered = nodes(true);
     for (const NoteNode &node : ordered)
         array.append(nodeToJson(node));
+    QJsonArray assetArray;
+    const QVector<AssetRecord> orderedAssets = assets(true);
+    for (const AssetRecord &asset : orderedAssets)
+        assetArray.append(assetToJson(asset));
     // The notebook name lives in the encrypted index; the header never contains it.
     const QJsonObject index{
         {QStringLiteral("version"), kSchemaVersion},
         {QStringLiteral("notebookName"), m_name},
-        {QStringLiteral("nodes"), array}
+        {QStringLiteral("nodes"), array},
+        {QStringLiteral("assets"), assetArray}
     };
     // Every save encrypts with a fresh nonce. The backup is a byte-identical copy.
     QByteArray cipherText;
@@ -903,6 +1047,160 @@ bool NotebookStore::writeNote(const QString &id, const QString &content, QString
         QString rollbackError;
         if (!writeAtomically(path, oldCipherText, &rollbackError) && error)
             error->append(QStringLiteral(" Content rollback also failed: %1").arg(rollbackError));
+        return false;
+    }
+    return true;
+}
+
+QVector<AssetRecord> NotebookStore::assets(bool includeDeleted) const
+{
+    QVector<AssetRecord> result;
+    result.reserve(m_assets.size());
+    for (auto it = m_assets.cbegin(); it != m_assets.cend(); ++it) {
+        if (includeDeleted || !it->deleted)
+            result.append(it.value());
+    }
+    std::sort(result.begin(), result.end(), [](const AssetRecord &left, const AssetRecord &right) {
+        return left.id < right.id;
+    });
+    return result;
+}
+
+AssetRecord NotebookStore::asset(const QString &id) const
+{
+    return m_assets.value(normalizedUuid(id));
+}
+
+QByteArray NotebookStore::readAsset(const QString &id, QString *error) const
+{
+    if (error)
+        error->clear();
+    if (!m_open) {
+        setError(error, QStringLiteral("No notebook is open."));
+        return QByteArray();
+    }
+    const AssetRecord saved = asset(id);
+    if (saved.id.isEmpty() || saved.deleted) {
+        setError(error, QStringLiteral("The asset does not exist or is deleted."));
+        return QByteArray();
+    }
+
+    QByteArray cipherText;
+    if (!readFileBytes(assetPath(saved.id), &cipherText, error))
+        return QByteArray();
+    QByteArray plainText;
+    if (!m_crypto->decrypt(cipherText, assetAssociatedData(m_id, saved.id), &plainText, error))
+        return QByteArray();
+    return plainText;
+}
+
+bool NotebookStore::writeAsset(const AssetRecord &input, const QByteArray &data, QString *error)
+{
+    if (error)
+        error->clear();
+    if (!m_open)
+        return setError(error, QStringLiteral("No notebook is open."));
+
+    AssetRecord result;
+    if (!normalizeAsset(input, &result, error))
+        return false;
+    const auto old = m_assets.constFind(result.id);
+    const bool hadOldAsset = old != m_assets.cend();
+    const AssetRecord oldAsset = hadOldAsset ? old.value() : AssetRecord();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (result.createdAt == 0)
+        result.createdAt = hadOldAsset && oldAsset.createdAt != 0 ? oldAsset.createdAt : now;
+    result.updatedAt = now;
+    result.writerId = m_writerId;
+    result.size = data.size();
+    result.sha256 = QString::fromLatin1(
+        QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex());
+
+    const bool writeContent = !result.deleted;
+    const QString path = assetPath(result.id);
+    QByteArray oldCipherText;
+    bool hadOldContent = false;
+    if (writeContent && !QDir().mkpath(internalPath(kAssetsDirectory)))
+        return setError(error, QStringLiteral("Cannot create the asset directory."));
+    if (writeContent && QFileInfo::exists(path)) {
+        if (!readFileBytes(path, &oldCipherText, error))
+            return false;
+        hadOldContent = true;
+    }
+    if (writeContent && !writeAssetFile(result.id, data, error))
+        return false;
+
+    m_assets.insert(result.id, result);
+    if (!saveIndex(error)) {
+        if (hadOldAsset)
+            m_assets.insert(result.id, oldAsset);
+        else
+            m_assets.remove(result.id);
+        if (writeContent) {
+            QString rollbackError;
+            const bool rolledBack = hadOldContent
+                ? writeAtomically(path, oldCipherText, &rollbackError)
+                : QFile::remove(path);
+            if (!rolledBack && error) {
+                error->append(QStringLiteral(" Asset content rollback also failed: %1")
+                                  .arg(rollbackError));
+            }
+        }
+        return false;
+    }
+    return true;
+}
+
+bool NotebookStore::applyRemoteAsset(const AssetRecord &input, const QByteArray &data, QString *error)
+{
+    if (error)
+        error->clear();
+    if (!m_open)
+        return setError(error, QStringLiteral("No notebook is open."));
+
+    AssetRecord remote;
+    if (!normalizeAsset(input, &remote, error))
+        return false;
+    if (!remote.deleted) {
+        const QString digest = QString::fromLatin1(
+            QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex());
+        if (remote.size != data.size() || remote.sha256.compare(digest, Qt::CaseInsensitive) != 0)
+            return setError(error, QStringLiteral("The remote asset content does not match its metadata."));
+    }
+
+    const bool writeContent = !remote.deleted;
+    const QString path = assetPath(remote.id);
+    QByteArray oldCipherText;
+    bool hadOldContent = false;
+    if (writeContent && !QDir().mkpath(internalPath(kAssetsDirectory)))
+        return setError(error, QStringLiteral("Cannot create the asset directory."));
+    if (writeContent && QFileInfo::exists(path)) {
+        if (!readFileBytes(path, &oldCipherText, error))
+            return false;
+        hadOldContent = true;
+    }
+    if (writeContent && !writeAssetFile(remote.id, data, error))
+        return false;
+
+    const auto old = m_assets.constFind(remote.id);
+    const bool hadOldAsset = old != m_assets.cend();
+    const AssetRecord oldAsset = hadOldAsset ? old.value() : AssetRecord();
+    m_assets.insert(remote.id, remote);
+    if (!saveIndex(error)) {
+        if (hadOldAsset)
+            m_assets.insert(remote.id, oldAsset);
+        else
+            m_assets.remove(remote.id);
+        if (writeContent) {
+            QString rollbackError;
+            const bool rolledBack = hadOldContent
+                ? writeAtomically(path, oldCipherText, &rollbackError)
+                : QFile::remove(path);
+            if (!rolledBack && error) {
+                error->append(QStringLiteral(" Asset content rollback also failed: %1")
+                                  .arg(rollbackError));
+            }
+        }
         return false;
     }
     return true;

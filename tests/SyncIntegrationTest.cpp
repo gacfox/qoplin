@@ -6,6 +6,8 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QHostAddress>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -153,36 +155,82 @@ void SyncIntegrationTest::twoCopiesSynchronize()
     const QString folder = first.createNode(NoteNode::Type::Folder, QString(), QStringLiteral("Shared"), &error);
     const QString note = first.createNode(NoteNode::Type::Note, folder, QStringLiteral("Document"), &error);
     QVERIFY(first.writeNote(note, QStringLiteral("from first"), &error));
+    const QByteArray png = QByteArray::fromBase64(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZrXcAAAAASUVORK5CYII=");
+    AssetRecord image;
+    image.id = QStringLiteral("12345678-1234-4123-8123-123456789abc");
+    image.mimeType = QStringLiteral("image/png");
+    image.extension = QStringLiteral("png");
+    image.originalName = QStringLiteral("pixel.png");
+    QVERIFY2(first.writeAsset(image, png, &error), qPrintable(error));
+
     SyncResult result = sync(first, server.endpoint());
     QVERIFY2(result.success, qPrintable(result.message));
-    QCOMPARE(result.uploaded, 2);
+    QCOMPARE(result.uploaded, 3);
     QVERIFY(!server.containsInFiles("from first"));
     QVERIFY(!server.containsInFiles("Document"));
+    QVERIFY(!server.containsInFiles(png));
+    QVERIFY(!server.containsInFiles("pixel.png"));
 
     result = sync(second, server.endpoint());
     QVERIFY2(result.success, qPrintable(result.message));
-    QCOMPARE(result.downloaded, 2);
+    QCOMPARE(result.downloaded, 3);
     QCOMPARE(second.readNote(note, &error), QStringLiteral("from first"));
     QCOMPARE(second.node(folder).title, QStringLiteral("Shared"));
+    QCOMPARE(second.readAsset(image.id, &error), png);
+    QCOMPARE(second.asset(image.id).writerId, QStringLiteral("device-a"));
+
+    // The remote payload is binary: a big-endian JSON length, full metadata, then PNG bytes.
+    const QByteArray remotePrefix = "/dav/Qoplin/" + first.id().toUtf8();
+    CryptoService remoteCrypto;
+    const QJsonObject remoteHeader = QJsonDocument::fromJson(
+        server.files.value(remotePrefix + "/header.json")).object();
+    QVERIFY2(remoteCrypto.initializeFromHeader(remoteHeader, QStringLiteral("integration password"), &error),
+             qPrintable(error));
+    QByteArray envelope;
+    QVERIFY2(remoteCrypto.decrypt(server.files.value(remotePrefix + "/assets/" + image.id.toUtf8() + ".bin"),
+                                  "qoplin/asset/v1:" + image.id.toUtf8(), &envelope, &error),
+             qPrintable(error));
+    QVERIFY(envelope.size() > 4);
+    const quint32 metadataLength = (static_cast<quint32>(static_cast<unsigned char>(envelope.at(0))) << 24)
+        | (static_cast<quint32>(static_cast<unsigned char>(envelope.at(1))) << 16)
+        | (static_cast<quint32>(static_cast<unsigned char>(envelope.at(2))) << 8)
+        | static_cast<quint32>(static_cast<unsigned char>(envelope.at(3)));
+    QVERIFY(metadataLength <= static_cast<quint32>(envelope.size() - 4));
+    const QJsonObject metadata = QJsonDocument::fromJson(
+        envelope.mid(4, static_cast<int>(metadataLength))).object();
+    QCOMPARE(metadata.value(QStringLiteral("id")).toString(), image.id);
+    QCOMPARE(metadata.value(QStringLiteral("originalName")).toString(), image.originalName);
+    QCOMPARE(envelope.mid(4 + static_cast<int>(metadataLength)), png);
 
     QTest::qWait(2);
     QVERIFY(second.writeNote(note, QStringLiteral("newer from second"), &error));
-    result = sync(second, server.endpoint());
-    QVERIFY2(result.success, qPrintable(result.message));
-    QCOMPARE(result.uploaded, 1);
-    result = sync(first, server.endpoint());
-    QVERIFY2(result.success, qPrintable(result.message));
-    QCOMPARE(result.downloaded, 1);
-    QCOMPARE(first.readNote(note, &error), QStringLiteral("newer from second"));
-
-    QVERIFY(second.removeNode(folder, &error));
+    const QByteArray newerPng = png + QByteArrayLiteral("updated");
+    QVERIFY(second.writeAsset(second.asset(image.id), newerPng, &error));
     result = sync(second, server.endpoint());
     QVERIFY2(result.success, qPrintable(result.message));
     QCOMPARE(result.uploaded, 2);
     result = sync(first, server.endpoint());
     QVERIFY2(result.success, qPrintable(result.message));
+    QCOMPARE(result.downloaded, 2);
+    QCOMPARE(first.readNote(note, &error), QStringLiteral("newer from second"));
+    QCOMPARE(first.readAsset(image.id, &error), newerPng);
+    QCOMPARE(first.asset(image.id).writerId, QStringLiteral("device-b"));
+
+    AssetRecord deletedImage = second.asset(image.id);
+    deletedImage.deleted = true;
+    QVERIFY(second.writeAsset(deletedImage, QByteArray(), &error));
+    QVERIFY(second.removeNode(folder, &error));
+    result = sync(second, server.endpoint());
+    QVERIFY2(result.success, qPrintable(result.message));
+    QCOMPARE(result.uploaded, 3);
+    result = sync(first, server.endpoint());
+    QVERIFY2(result.success, qPrintable(result.message));
+    QCOMPARE(result.downloaded, 3);
     QVERIFY(first.node(folder).deleted);
     QVERIFY(first.node(note).deleted);
+    QVERIFY(first.asset(image.id).deleted);
+    QVERIFY(first.readAsset(image.id, &error).isNull());
 }
 
 QTEST_GUILESS_MAIN(SyncIntegrationTest)

@@ -10,6 +10,7 @@
 - `cut.png`：原文件 `cut.png`
 - `copy.png`：原文件 `page_copy.png`
 - `paste.png`：原文件 `page_paste.png`
+- `insert-image.png`：原文件 `picture_add.png`
 - `view-mode.png`：原文件 `application_view_columns.png`
 - `word-wrap.png`：用户提供的自定义图标，原文件 `H:\workspace-web\word-wrap.png`
 

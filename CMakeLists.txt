@@ -73,8 +73,13 @@ qt_add_executable(qoplin WIN32
     src/ui/StartWindow.h
     src/ui/StartWindow.ui
     src/ui/MainWindow.cpp
+    src/ui/MainWindowImages.cpp
     src/ui/MainWindowSync.cpp
     src/ui/MainWindow.h
+    src/ui/MarkdownPreviewBrowser.cpp
+    src/ui/MarkdownPreviewBrowser.h
+    src/ui/NotePlainTextEdit.cpp
+    src/ui/NotePlainTextEdit.h
     src/ui/MainWindow.ui
     src/ui/StatusBarContent.cpp
     src/ui/StatusBarContent.h
@@ -129,8 +134,13 @@ if(BUILD_TESTING)
         resources/qoplin.qrc
         tests/UiSmokeTest.cpp
         src/ui/MainWindow.cpp
+        src/ui/MainWindowImages.cpp
         src/ui/MainWindowSync.cpp
         src/ui/MainWindow.h
+        src/ui/MarkdownPreviewBrowser.cpp
+        src/ui/MarkdownPreviewBrowser.h
+        src/ui/NotePlainTextEdit.cpp
+        src/ui/NotePlainTextEdit.h
         src/ui/MainWindow.ui
         src/ui/StatusBarContent.cpp
         src/ui/StatusBarContent.h

@@ -9,6 +9,7 @@ private slots:
     void notebookLifecycle();
     void hierarchyAndTombstones();
     void remoteNodePreservesRevision();
+    void assetStorage();
     void indexBackupRecovery();
     void headerBackupRecovery();
     void syncSettingsRoundTrip();

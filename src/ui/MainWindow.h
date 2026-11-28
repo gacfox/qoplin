@@ -1,12 +1,15 @@
 #pragma once
 
+#include "models/AssetRecord.h"
 #include "models/NoteNode.h"
 
+#include <QHash>
 #include <QMainWindow>
 #include <memory>
 
 class AppSettings;
 class NotebookStore;
+class QMimeData;
 class QThread;
 class QTimer;
 class QTreeWidgetItem;
@@ -55,6 +58,20 @@ private:
     void startSync(const QString &serverPassword);
     void syncFinished(bool success, const QString &message, int uploaded, int downloaded);
     bool canLeaveEditor();
+    void insertImagesFromFiles();
+    void insertImageFromClipboard(const QMimeData *mimeData);
+    bool insertImageFile(const QString &path);
+    bool insertImageData(const QByteArray &data, const QString &mimeType,
+                         const QString &extension, const QString &originalName);
+    QByteArray loadAssetData(const QString &path);
+    void exportAsset(const QString &path);
+    bool savePendingAssets(const QString &markdown, QString *error);
+
+    struct PendingAsset
+    {
+        AssetRecord record;
+        QByteArray data;
+    };
 
     Ui::MainWindow *ui;
     std::unique_ptr<NotebookStore> m_store;
@@ -67,4 +84,5 @@ private:
     bool m_rebuilding = false;
     QThread *m_syncThread = nullptr;
     SyncWorker *m_syncWorker = nullptr;
+    QHash<QString, PendingAsset> m_pendingAssets;
 };

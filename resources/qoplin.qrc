@@ -11,6 +11,7 @@
         <file alias="cut.png">icons/actions/cut.png</file>
         <file alias="copy.png">icons/actions/copy.png</file>
         <file alias="paste.png">icons/actions/paste.png</file>
+        <file alias="insert-image.png">icons/actions/insert-image.png</file>
         <file alias="view-mode.png">icons/actions/view-mode.png</file>
         <file alias="word-wrap.png">icons/actions/word-wrap.png</file>
         <file alias="sync.png">icons/actions/sync.png</file>

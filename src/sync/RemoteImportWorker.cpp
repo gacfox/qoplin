@@ -136,6 +136,16 @@ QString objectPath(const QString &id)
     return QStringLiteral("objects/%1.bin").arg(id);
 }
 
+QByteArray assetContext(const QString &id)
+{
+    return QByteArrayLiteral("qoplin/asset/v1:") + id.toUtf8();
+}
+
+QString remoteAssetPath(const QString &id)
+{
+    return QStringLiteral("assets/%1.bin").arg(id);
+}
+
 bool nodeFromJson(const QJsonObject &object, const QString &expectedId,
                   NoteNode *node, QString *error)
 {
@@ -188,25 +198,67 @@ bool nodeFromJson(const QJsonObject &object, const QString &expectedId,
     return true;
 }
 
-bool parseManifest(const QJsonObject &object, QHash<QString, RemoteEntry> *entries,
-                   QString *notebookName, QString *error)
+bool assetFromJson(const QJsonObject &object, const QString &expectedId,
+                   AssetRecord *asset, QString *error)
 {
-    if (object.value(QStringLiteral("version")).toInt(-1) != kManifestVersion
-        || !object.value(QStringLiteral("nodes")).isArray()) {
-        return fail(error, QStringLiteral("The remote manifest has an unsupported format."));
+    if (!object.value(QStringLiteral("id")).isString()
+        || !object.value(QStringLiteral("mimeType")).isString()
+        || !object.value(QStringLiteral("extension")).isString()
+        || !object.value(QStringLiteral("originalName")).isString()
+        || !object.value(QStringLiteral("sha256")).isString()
+        || !object.value(QStringLiteral("writerId")).isString()
+        || !object.value(QStringLiteral("deleted")).isBool()) {
+        return fail(error, QStringLiteral("A remote asset has invalid metadata."));
     }
 
-    notebookName->clear();
-    if (object.contains(QStringLiteral("notebookName"))) {
-        if (!object.value(QStringLiteral("notebookName")).isString())
-            return fail(error, QStringLiteral("The remote manifest has an invalid notebook name."));
-        *notebookName = object.value(QStringLiteral("notebookName")).toString();
+    AssetRecord result;
+    result.id = object.value(QStringLiteral("id")).toString();
+    result.mimeType = object.value(QStringLiteral("mimeType")).toString();
+    result.extension = object.value(QStringLiteral("extension")).toString();
+    result.originalName = object.value(QStringLiteral("originalName")).toString();
+    result.sha256 = object.value(QStringLiteral("sha256")).toString();
+    result.writerId = object.value(QStringLiteral("writerId")).toString();
+    result.deleted = object.value(QStringLiteral("deleted")).toBool();
+    if (!readInt64(object, QStringLiteral("size"), &result.size)
+        || !readInt64(object, QStringLiteral("createdAt"), &result.createdAt)
+        || !readInt64(object, QStringLiteral("updatedAt"), &result.updatedAt)
+        || result.size < 0 || result.createdAt < 0 || result.updatedAt < 0) {
+        return fail(error, QStringLiteral("A remote asset has invalid sizes or timestamps."));
     }
+    if (!validUuid(result.id) || result.id != expectedId)
+        return fail(error, QStringLiteral("A remote asset has an unsafe or inconsistent identifier."));
 
+    *asset = result;
+    return true;
+}
+
+bool decodeAssetEnvelope(const QByteArray &plainText, const QString &expectedId,
+                         AssetRecord *asset, QByteArray *data, QString *error)
+{
+    if (plainText.size() < 4)
+        return fail(error, QStringLiteral("A remote asset has a truncated binary envelope."));
+    const auto byte = [&plainText](int offset) {
+        return static_cast<quint32>(static_cast<unsigned char>(plainText.at(offset)));
+    };
+    const quint32 metadataLength = (byte(0) << 24) | (byte(1) << 16) | (byte(2) << 8) | byte(3);
+    if (metadataLength > static_cast<quint32>(plainText.size() - 4))
+        return fail(error, QStringLiteral("A remote asset has an invalid metadata length."));
+    QJsonObject metadata;
+    if (!parseObject(plainText.mid(4, static_cast<int>(metadataLength)), &metadata,
+                     QStringLiteral("Remote asset metadata"), error)
+        || !assetFromJson(metadata, expectedId, asset, error)) {
+        return false;
+    }
+    *data = plainText.mid(4 + static_cast<int>(metadataLength));
+    return true;
+}
+
+bool parseManifestEntries(const QJsonArray &array, QHash<QString, RemoteEntry> *entries,
+                          QString *error)
+{
     entries->clear();
     QSet<QString> normalizedIds;
-    const QJsonArray nodes = object.value(QStringLiteral("nodes")).toArray();
-    for (const QJsonValue &value : nodes) {
+    for (const QJsonValue &value : array) {
         if (!value.isObject())
             return fail(error, QStringLiteral("The remote manifest contains an invalid entry."));
         const QJsonObject jsonEntry = value.toObject();
@@ -227,6 +279,27 @@ bool parseManifest(const QJsonObject &object, QHash<QString, RemoteEntry> *entri
         normalizedIds.insert(normalizedUuid(entry.id));
     }
     return true;
+}
+
+bool parseManifest(const QJsonObject &object, QHash<QString, RemoteEntry> *entries,
+                   QHash<QString, RemoteEntry> *assetEntries, QString *notebookName, QString *error)
+{
+    if (object.value(QStringLiteral("version")).toInt(-1) != kManifestVersion
+        || !object.value(QStringLiteral("nodes")).isArray()) {
+        return fail(error, QStringLiteral("The remote manifest has an unsupported format."));
+    }
+
+    notebookName->clear();
+    if (object.contains(QStringLiteral("notebookName"))) {
+        if (!object.value(QStringLiteral("notebookName")).isString())
+            return fail(error, QStringLiteral("The remote manifest has an invalid notebook name."));
+        *notebookName = object.value(QStringLiteral("notebookName")).toString();
+    }
+    const QJsonValue assets = object.value(QStringLiteral("assets"));
+    if (!assets.isUndefined() && !assets.isArray())
+        return fail(error, QStringLiteral("The remote manifest has an invalid asset list."));
+    return parseManifestEntries(object.value(QStringLiteral("nodes")).toArray(), entries, error)
+        && parseManifestEntries(assets.toArray(), assetEntries, error);
 }
 
 bool pathEntryExists(const QString &path)
@@ -379,10 +452,11 @@ void RemoteImportWorker::start()
     QByteArray manifestPlainText;
     QJsonObject manifest;
     QHash<QString, RemoteEntry> remoteEntries;
+    QHash<QString, RemoteEntry> remoteAssetEntries;
     QString manifestNotebookName;
     if (!crypto->decrypt(manifestResponse.body, kManifestContext, &manifestPlainText, &error)
         || !parseObject(manifestPlainText, &manifest, QStringLiteral("The remote manifest"), &error)
-        || !parseManifest(manifest, &remoteEntries, &manifestNotebookName, &error)) {
+        || !parseManifest(manifest, &remoteEntries, &remoteAssetEntries, &manifestNotebookName, &error)) {
         complete(false, error, {}, 0);
         return;
     }
@@ -514,6 +588,44 @@ void RemoteImportWorker::start()
             complete(false, error, {}, 0);
             return;
         }
+    }
+
+    QStringList assetIds = remoteAssetEntries.keys();
+    std::sort(assetIds.begin(), assetIds.end());
+    // Import and release one asset at a time. Older remotes may list no assets, and
+    // an asset listed by an older/incomplete remote is allowed to be absent.
+    for (const QString &id : assetIds) {
+        if (cancellationFailed())
+            return;
+        const WebDavResponse assetResponse = m_client->get(remoteAssetPath(id));
+        if (assetResponse.statusCode == 404)
+            continue;
+        if (!successful(assetResponse, QStringLiteral("Downloading a remote asset"), &error)) {
+            if (cancellationFailed())
+                return;
+            complete(false, error, {}, 0);
+            return;
+        }
+
+        QByteArray plainText;
+        AssetRecord asset;
+        QByteArray assetData;
+        if (!crypto->decrypt(assetResponse.body, assetContext(id), &plainText, &error)
+            || !decodeAssetEnvelope(plainText, id, &asset, &assetData, &error)) {
+            complete(false, error, {}, 0);
+            return;
+        }
+        const RemoteEntry entry = remoteAssetEntries.value(id);
+        if (asset.updatedAt != entry.updatedAt || asset.writerId != entry.writerId) {
+            complete(false, QStringLiteral("A remote asset does not match its manifest entry."), {}, 0);
+            return;
+        }
+        if (!store.applyRemoteAsset(asset, assetData, &error)) {
+            complete(false, error, {}, 0);
+            return;
+        }
+        ++importedObjects;
+        emit progress(QStringLiteral("Imported %1 object(s).").arg(importedObjects));
     }
     if (cancellationFailed())
         return;

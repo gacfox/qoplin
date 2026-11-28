@@ -1,18 +1,23 @@
 #include "storage/AppSettings.h"
 #include "storage/NotebookStore.h"
 #include "ui/MainWindow.h"
+#include "ui/MarkdownPreviewBrowser.h"
 #include "ui/RemoteImportDialog.h"
 
 #include <QAbstractButton>
 #include <QAction>
 #include <QClipboard>
 #include <QComboBox>
+#include <QFileDialog>
+#include <QImage>
 #include <QLabel>
 #include <QLayout>
+#include <QMimeData>
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTextBlock>
 #include <QTextBrowser>
@@ -22,6 +27,18 @@
 #include <QtTest>
 
 namespace {
+int firstImageWidth(QTextDocument *document)
+{
+    for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
+        for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (fragment.isValid() && fragment.charFormat().toImageFormat().isValid())
+                return qRound(fragment.charFormat().toImageFormat().width());
+        }
+    }
+    return 0;
+}
+
 void answerMessageBox(QMessageBox::StandardButton button)
 {
     QTimer::singleShot(50, [button] {
@@ -40,6 +57,8 @@ private slots:
     void editPreviewAndManualSave();
     void codeBlockHasGrayBackground();
     void remoteImportDialogIsCompact();
+    void imagePasteSaveAndPreview();
+    void largeJpegUsesScaledDecoding();
 };
 
 void UiSmokeTest::editPreviewAndManualSave()
@@ -232,6 +251,130 @@ void UiSmokeTest::remoteImportDialogIsCompact()
     QVERIFY(message && !message->isVisible());
     QVERIFY2(dialog.sizeHint().height() < 450,
              qPrintable(QStringLiteral("Unexpected dialog height: %1").arg(dialog.sizeHint().height())));
+}
+
+void UiSmokeTest::imagePasteSaveAndPreview()
+{
+    QCoreApplication::setOrganizationName(QStringLiteral("QoplinTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("UiSmokeTest"));
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    auto *store = new NotebookStore;
+    QString error;
+    QVERIFY2(store->create(temp.path(), QStringLiteral("Image Test"), QStringLiteral("test-device"),
+                           QStringLiteral("test master password"), &error), qPrintable(error));
+    const QString note = store->createNode(NoteNode::Type::Note, QString(), QStringLiteral("Images"), &error);
+    QVERIFY(!note.isEmpty());
+
+    AppSettings settings;
+    MainWindow window(store, &settings);
+    window.show();
+    auto *tree = window.findChild<QTreeWidget *>(QStringLiteral("noteTree"));
+    auto *editor = window.findChild<QPlainTextEdit *>(QStringLiteral("editor"));
+    auto *preview = window.findChild<QTextBrowser *>(QStringLiteral("preview"));
+    auto *save = window.findChild<QAction *>(QStringLiteral("actionSave"));
+    auto *previewMode = window.findChild<QAction *>(QStringLiteral("actionPreviewMode"));
+    QVERIFY(tree && editor && preview && save && previewMode);
+    tree->setCurrentItem(tree->topLevelItem(0));
+
+    QImage source(400, 240, QImage::Format_ARGB32);
+    source.fill(QColor(220, 40, 60));
+    auto *mimeData = new QMimeData;
+    mimeData->setImageData(source);
+    QApplication::clipboard()->setMimeData(mimeData);
+    editor->paste();
+
+    const QString markdown = editor->toPlainText();
+    const QRegularExpressionMatch match = QRegularExpression(
+        QStringLiteral("assets/([0-9a-f-]{36})\\.png")).match(markdown);
+    QVERIFY(match.hasMatch());
+    const QString assetId = match.captured(1);
+    QCOMPARE(store->assets().size(), 0);
+
+    save->trigger();
+    QCOMPARE(store->assets().size(), 1);
+    const QByteArray original = store->readAsset(assetId, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(original.startsWith(QByteArray("\x89PNG", 4)));
+    QFile encryptedFile(store->assetPath(assetId));
+    QVERIFY(encryptedFile.open(QIODevice::ReadOnly));
+    const QByteArray encrypted = encryptedFile.readAll();
+    QVERIFY(!encrypted.startsWith(QByteArray("\x89PNG", 4)));
+    QVERIFY(!encrypted.contains(original));
+
+    previewMode->trigger();
+    const QVariant resource = preview->document()->resource(
+        QTextDocument::ImageResource, QUrl(QStringLiteral("assets/%1.png").arg(assetId)));
+    const QImage displayed = resource.value<QImage>();
+    QVERIFY(!displayed.isNull());
+    QCOMPARE(displayed.size(), source.size());
+
+    MarkdownPreviewBrowser browser;
+    browser.setAssetProvider([&original](const QString &) { return original; });
+    browser.resize(200, 300);
+    browser.show();
+    browser.setMarkdown(markdown);
+    QTest::qWait(50);
+    QCOMPARE(firstImageWidth(browser.document()), browser.viewport()->width() - 24);
+    browser.resize(300, 300);
+    QTest::qWait(50);
+    QCOMPARE(firstImageWidth(browser.document()), browser.viewport()->width() - 24);
+    browser.setMarkdown(markdown);
+    QTest::qWait(50);
+    QCOMPARE(firstImageWidth(browser.document()), browser.viewport()->width() - 24);
+
+    const QString exportPath = temp.path() + QStringLiteral("/exported.png");
+    QString actualExportPath;
+    QTimer::singleShot(100, [&exportPath, &actualExportPath] {
+        auto *dialog = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+        Q_ASSERT(dialog);
+        dialog->selectFile(exportPath);
+        actualExportPath = dialog->selectedFiles().constFirst();
+        QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+    });
+    QMetaObject::invokeMethod(preview, "exportAssetRequested",
+        Q_ARG(QString, QStringLiteral("assets/%1.png").arg(assetId)));
+    QVERIFY(!actualExportPath.isEmpty());
+    QFile exported(actualExportPath);
+    QVERIFY(exported.open(QIODevice::ReadOnly));
+    QCOMPARE(exported.readAll(), original);
+}
+
+void UiSmokeTest::largeJpegUsesScaledDecoding()
+{
+    const QString path = QStringLiteral("H:/workspace-web/3c2921c8ly1hvg4o58l48j272t3zcqvg.jpg");
+    if (!QFileInfo::exists(path)) QSKIP("Local large JPEG fixture is unavailable");
+
+    QCoreApplication::setOrganizationName(QStringLiteral("QoplinTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("UiSmokeTest"));
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    auto *store = new NotebookStore;
+    QString error;
+    QVERIFY(store->create(temp.path(), QStringLiteral("Large JPEG"), QStringLiteral("test-device"),
+                          QStringLiteral("test master password"), &error));
+    const QString note = store->createNode(NoteNode::Type::Note, QString(), QStringLiteral("Large"), &error);
+    QVERIFY(!note.isEmpty());
+
+    AppSettings settings;
+    MainWindow window(store, &settings);
+    auto *tree = window.findChild<QTreeWidget *>(QStringLiteral("noteTree"));
+    auto *editor = window.findChild<QPlainTextEdit *>(QStringLiteral("editor"));
+    auto *save = window.findChild<QAction *>(QStringLiteral("actionSave"));
+    QVERIFY(tree && editor && save);
+    tree->setCurrentItem(tree->topLevelItem(0));
+
+    auto *mimeData = new QMimeData;
+    mimeData->setUrls({QUrl::fromLocalFile(path)});
+    QApplication::clipboard()->setMimeData(mimeData);
+    editor->paste();
+    QVERIFY(editor->toPlainText().contains(QStringLiteral("assets/")));
+    save->trigger();
+    QCOMPARE(store->assets().size(), 1);
+    const QString assetId = store->assets().constFirst().id;
+    QFile source(path);
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    QCOMPARE(store->readAsset(assetId, &error), source.readAll());
 }
 
 QTEST_MAIN(UiSmokeTest)

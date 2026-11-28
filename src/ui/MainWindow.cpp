@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 #include "ui_MainWindow.h"
+#include "MarkdownPreviewBrowser.h"
+#include "NotePlainTextEdit.h"
 #include "SettingsDialog.h"
 #include "StatusBarContent.h"
 #include "storage/AppSettings.h"
@@ -40,6 +42,8 @@ MainWindow::MainWindow(NotebookStore *store, AppSettings *settings, QWidget *par
     : QMainWindow(parent), ui(new Ui::MainWindow), m_store(store), m_settings(settings)
 {
     ui->setupUi(this);
+    ui->preview->setAssetProvider([this](const QString &path) { return loadAssetData(path); });
+    connect(ui->preview, &MarkdownPreviewBrowser::exportAssetRequested, this, &MainWindow::exportAsset);
     // QMainWindow reapplies the active style's toolbar defaults during setupUi().
     ui->toolBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
     ui->toolBar->setIconSize(QSize(16, 16));
@@ -94,6 +98,8 @@ MainWindow::MainWindow(NotebookStore *store, AppSettings *settings, QWidget *par
     connect(ui->actionCopy, &QAction::triggered, ui->editor, &QPlainTextEdit::copy);
     connect(ui->actionPaste, &QAction::triggered, ui->editor, &QPlainTextEdit::paste);
     connect(ui->actionSelectAll, &QAction::triggered, ui->editor, &QPlainTextEdit::selectAll);
+    connect(ui->editor, &NotePlainTextEdit::imagePasteRequested, this, &MainWindow::insertImageFromClipboard);
+    connect(ui->actionInsertImage, &QAction::triggered, this, &MainWindow::insertImagesFromFiles);
     connect(ui->editor, &QPlainTextEdit::undoAvailable, this, [this](bool available) {
         ui->actionUndo->setEnabled(available && !m_currentNoteId.isEmpty());
     });
@@ -249,6 +255,7 @@ void MainWindow::openSelectedNode()
 
 void MainWindow::clearEditor()
 {
+    m_pendingAssets.clear();
     m_loading = true;
     m_currentNoteId.clear();
     setDirty(false);
@@ -272,6 +279,7 @@ void MainWindow::loadNote(const QString &id)
         QMessageBox::critical(this, tr("打开笔记失败"), error);
         return;
     }
+    m_pendingAssets.clear();
     m_loading = true;
     m_currentNoteId = id;
     setDirty(false);
@@ -296,6 +304,11 @@ bool MainWindow::saveCurrentNote()
     const NoteNode before = m_store->node(m_currentNoteId);
     if (before.title != title && !m_store->renameNode(m_currentNoteId, title, &error)) {
         QMessageBox::critical(this, tr("重命名失败"), error);
+        return false;
+    }
+    if (m_dirty && !savePendingAssets(ui->editor->toPlainText(), &error)) {
+        m_statusContent->setSaveText(tr("保存失败"));
+        ui->statusBar->showMessage(error, 10000);
         return false;
     }
     if (m_dirty && !m_store->writeNote(m_currentNoteId, ui->editor->toPlainText(), &error)) {
@@ -458,6 +471,7 @@ void MainWindow::setEditorAvailable(bool available)
     ui->actionCopy->setEnabled(available && ui->editor->textCursor().hasSelection());
     ui->actionPaste->setEnabled(available && ui->editor->canPaste());
     ui->actionSelectAll->setEnabled(available);
+    ui->actionInsertImage->setEnabled(available);
 }
 
 void MainWindow::openSettings()
