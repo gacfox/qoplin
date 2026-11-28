@@ -77,6 +77,11 @@ void UiSmokeTest::editPreviewAndManualSave()
         auto *toolBar = window.findChild<QToolBar *>(QStringLiteral("toolBar"));
         auto *newNote = window.findChild<QAction *>(QStringLiteral("actionNewNote"));
         auto *sync = window.findChild<QAction *>(QStringLiteral("actionSync"));
+        auto *cycleView = window.findChild<QAction *>(QStringLiteral("actionCycleView"));
+        auto *undo = window.findChild<QAction *>(QStringLiteral("actionUndo"));
+        auto *redo = window.findChild<QAction *>(QStringLiteral("actionRedo"));
+        auto *cut = window.findChild<QAction *>(QStringLiteral("actionCut"));
+        auto *paste = window.findChild<QAction *>(QStringLiteral("actionPaste"));
         QVERIFY(tree && editor && preview && mode && title && save);
         QVERIFY(toolBar && newNote && sync);
         QCOMPARE(toolBar->toolButtonStyle(), Qt::ToolButtonIconOnly);
@@ -84,6 +89,9 @@ void UiSmokeTest::editPreviewAndManualSave()
         QVERIFY(!save->icon().isNull());
         QVERIFY(!sync->icon().isNull());
         QVERIFY(splitMode && previewMode && selectAll && copy && wordWrap && menuBar);
+        QVERIFY(cycleView && undo && redo && cut && paste);
+        for (QAction *action : {undo, redo, cut, copy, paste, cycleView, wordWrap})
+            QVERIFY(!action->icon().isNull());
         QVERIFY(!wordWrap->isChecked());
         QCOMPARE(editor->lineWrapMode(), QPlainTextEdit::NoWrap);
         QCOMPARE(menuBar->actions().size(), 5);
@@ -121,6 +129,13 @@ void UiSmokeTest::editPreviewAndManualSave()
         QVERIFY(previewMode->isChecked());
         splitMode->trigger();
         QCOMPARE(mode->currentIndex(), 2);
+        cycleView->trigger();
+        QCOMPARE(mode->currentIndex(), 0);
+        cycleView->trigger();
+        QCOMPARE(mode->currentIndex(), 1);
+        cycleView->trigger();
+        QCOMPARE(mode->currentIndex(), 2);
+        QVERIFY(cycleView->toolTip().contains(QStringLiteral("双列")));
         QVERIFY(preview->isVisible());
         QVERIFY(preview->document()->toPlainText().contains(QStringLiteral("Smoke Test")));
         QCOMPARE(store->readNote(note, &error), QString());

@@ -114,6 +114,9 @@ MainWindow::MainWindow(NotebookStore *store, AppSettings *settings, QWidget *par
     connect(ui->actionEditMode, &QAction::triggered, this, [this] { setMode(0); });
     connect(ui->actionPreviewMode, &QAction::triggered, this, [this] { setMode(1); });
     connect(ui->actionSplitMode, &QAction::triggered, this, [this] { setMode(2); });
+    connect(ui->actionCycleView, &QAction::triggered, this, [this] {
+        setMode((ui->modeCombo->currentIndex() + 1) % 3);
+    });
 
     connect(ui->actionAbout, &QAction::triggered, this, [this] {
         QMessageBox::about(this, tr("关于 Qoplin"),
@@ -428,6 +431,8 @@ void MainWindow::setMode(int mode)
     ui->actionEditMode->setChecked(mode == 0);
     ui->actionPreviewMode->setChecked(mode == 1);
     ui->actionSplitMode->setChecked(mode == 2);
+    const QStringList modeNames{tr("编辑"), tr("预览"), tr("双列")};
+    ui->actionCycleView->setToolTip(tr("视图切换（当前：%1）").arg(modeNames.at(mode)));
     if (ui->modeCombo->currentIndex() != mode) ui->modeCombo->setCurrentIndex(mode);
     ui->editor->setVisible(mode != 1);
     ui->preview->setVisible(mode != 0);

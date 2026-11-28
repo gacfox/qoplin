@@ -6,6 +6,13 @@
     <qresource prefix="/icons/actions">
         <file alias="new-note.png">icons/actions/new-note.png</file>
         <file alias="save.png">icons/actions/save.png</file>
+        <file alias="undo.png">icons/actions/undo.png</file>
+        <file alias="redo.png">icons/actions/redo.png</file>
+        <file alias="cut.png">icons/actions/cut.png</file>
+        <file alias="copy.png">icons/actions/copy.png</file>
+        <file alias="paste.png">icons/actions/paste.png</file>
+        <file alias="view-mode.png">icons/actions/view-mode.png</file>
+        <file alias="word-wrap.png">icons/actions/word-wrap.png</file>
         <file alias="sync.png">icons/actions/sync.png</file>
     </qresource>
 </RCC>
